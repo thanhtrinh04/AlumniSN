@@ -4,9 +4,19 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from cloudinary.models import CloudinaryField
 from enum import IntEnum
+
+class Role(IntEnum):
+    ADMIN = 0
+    ALUMNI = 1
+    TEACHER = 2
+    @classmethod
+    def choices(cls):
+        return [(role.value, role.name.capitalize()) for role in cls]
 class User(AbstractUser):
     avatar = CloudinaryField('avatar', null=False, blank=False, folder='MangXaHoi',
                              default='null')
+    cover = CloudinaryField('cover', null=True, blank=True, folder='MangXaHoi')
+    role = models.IntegerField(choices=Role.choices(), default=Role.ADMIN.value)
 
 class BaseModel(models.Model):
     created_date=models.DateTimeField(auto_now_add=True,null=True)
@@ -17,10 +27,7 @@ class BaseModel(models.Model):
         abstract=True
         ordering=["-id"]
 
-class Role(IntEnum):
-    ADMIN = 0
-    ALUMNI = 1
-    TEACHER = 2
+
 
 class Alumni(BaseModel):
     mssv=models.CharField(max_length=10,unique=True)

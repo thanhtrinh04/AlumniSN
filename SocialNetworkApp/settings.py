@@ -11,8 +11,12 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
-
+import cloudinary
+from dotenv import load_dotenv
+import os
+import oauth2_provider.contrib.rest_framework
 from django.conf.global_settings import AUTH_USER_MODEL
+import sendgrid
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -41,16 +45,36 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'socialnetwork.apps.SocialnetworkConfig',
     'cloudinary',
-    'cloudinary_storage'
+    'cloudinary_storage',
+    'rest_framework',
+    'oauth2_provider',
+    'corsheaders',
+    'drf_yasg',
+    'sendgrid',
 ]
 import pymysql
 pymysql.install_as_MySQLdb()
 
 AUTH_USER_MODEL='socialnetwork.User'
 
-import cloudinary
-from dotenv import load_dotenv
-import os
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
+    )
+}
+
+#cấu hình mail
+EMAIL_BACKEND = 'sendgrid_backend.SendgridBackend'
+SENDGRID_API_KEY =os.environ.get('SENDGRID_API_KEY')
+SENDGRID_SANDBOX_MODE_IN_DEBUG = False
+SENDGRID_ECHO_TO_STDOUT = True
+DEFAULT_FROM_EMAIL = 'alumnisnw@gmail.com'
+
+
+CLIENT_ID=os.getenv('CLIENT_ID')
+CLIENT_SECRET=os.getenv('CLIENT_SECRET')
+
+
 cloudinary.config(
     cloud_name=os.getenv('CLOUD_NAME'),
     api_key=os.getenv('API_KEY'),
@@ -60,7 +84,9 @@ load_dotenv()
 
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 
+
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -68,9 +94,13 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'oauth2_provider.middleware.OAuth2TokenMiddleware',
 ]
+CORS_ALLOW_ALL_ORIGINS = True
 
 ROOT_URLCONF = 'SocialNetworkApp.urls'
+
+AUTH_USER_MODEL='socialnetwork.User'
 
 TEMPLATES = [
     {
