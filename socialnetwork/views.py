@@ -8,7 +8,6 @@ from rest_framework.decorators import action
 from rest_framework import parsers, viewsets, generics,permissions,status
 from email.message import EmailMessage
 from django.core.mail import EmailMessage
-from django.http.multipartparser import MultiPartParser
 from rest_framework.decorators import action
 from rest_framework import parsers, viewsets, generics, permissions, status
 from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
@@ -25,7 +24,7 @@ from socialnetwork.paginator import UserPagination
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,InvitationPost
+from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
     ReactionSerializer, GroupSerializer,EventInvitePostSerializer
 from .perms import RolePermission,OwnerPermission,CommentDeletePermission
