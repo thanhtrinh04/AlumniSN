@@ -2,16 +2,16 @@ import datetime
 from django.utils import timezone
 from django.contrib.auth.hashers import make_password
 from rest_framework import serializers
-from socialnetwork.models import *
+from .models import *
 from django.contrib.auth import get_user_model
-
-User = get_user_model()
+from rest_framework.serializers import ModelSerializer, PrimaryKeyRelatedField
+# User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role']
+        fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role']
         extra_kwargs = {'password': {'write_only': True}}
 
 class UserRegisterSerializer(serializers.ModelSerializer):
@@ -91,3 +91,90 @@ class TeacherCreateSerializer(serializers.Serializer):
         )
 
         return user
+
+
+class PostImageSerializer(ModelSerializer):
+    class Meta:
+        model = PostImage
+        fields = ['id', 'image']
+
+class PostSerializer(ModelSerializer):
+    images = PostImageSerializer(many=True, required=False)
+    user = UserSerializer(read_only=True)
+    object_type = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Post
+        fields = ['id', 'content', 'images', 'lock_comment', 'user', 'created_date', 'updated_date', 'object_type']
+
+    def get_object_type(self, obj):
+        if SurveyPost.objects.filter(pk=obj.pk).exists():
+            return "survey"
+        elif InvitationPost.objects.filter(pk=obj.pk).exists():
+            return "invitation"
+        return "post"
+
+class CommentSerializer(ModelSerializer):
+    user = UserSerializer(read_only=True)
+    post = PostSerializer(read_only=True)
+
+    class Meta:
+        model = Comment
+        fields = ['id', 'user', 'content', 'image', 'post', 'parent', 'created_date', 'updated_date']
+
+class ReactionSerializer(ModelSerializer):
+    user = UserSerializer(read_only=True)
+    post = PostSerializer(read_only=True)
+
+    class Meta:
+        model = Reaction
+        fields = ['id', 'reaction', 'user', 'post', 'created_date', 'updated_date']
+
+class SurveyOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SurveyOption
+        fields = ['id', 'option']
+
+
+class SurveyQuestionSerializer(serializers.ModelSerializer):
+    options = SurveyOptionSerializer(many=True, required=True)
+
+    class Meta:
+        model = SurveyQuestion
+        fields = ['id', 'question', 'multi_choice', 'options']
+
+
+class SurveyPostSerializer(PostSerializer):
+    questions = SurveyQuestionSerializer(many=True, required=False)
+
+    class Meta:
+        model = SurveyPost
+        fields = ['id', 'end_time', 'survey_type', 'questions']
+
+class UserSurveyOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserSurveyOption
+        fields = ['id', 'user', 'survey_option']
+
+
+class SurveyDraftSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SurveyDraft
+        fields = ['id', 'survey_post', 'user', 'answers', 'drafted_at']
+
+
+class GroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Group
+        fields = ['id', 'group_name', 'users', 'created_date', 'updated_date']
+
+
+class InvitationPostSerializer(serializers.ModelSerializer):
+    users = PrimaryKeyRelatedField(many=True, queryset=User.objects.filter(is_active=True), required=False)
+    groups = PrimaryKeyRelatedField(many=True, queryset=Group.objects.filter(active=True), required=False)
+    images = PostImageSerializer(many=True, required=False)
+    user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = InvitationPost
+        fields = ['id', 'event_name', 'content', 'images', 'users', 'groups', 'created_date', 'user']

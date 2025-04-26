@@ -2,9 +2,10 @@ from sys import maxsize
 
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from cloudinary.models import CloudinaryField
 from enum import IntEnum
-
+from django.utils import timezone
 class Role(IntEnum):
     ADMIN = 0
     ALUMNI = 1
@@ -12,21 +13,36 @@ class Role(IntEnum):
     @classmethod
     def choices(cls):
         return [(role.value, role.name.capitalize()) for role in cls]
+
 class User(AbstractUser):
     avatar = CloudinaryField('avatar', null=False, blank=False, folder='MangXaHoi',
                              default='null')
     cover = CloudinaryField('cover', null=True, blank=True, folder='MangXaHoi')
     role = models.IntegerField(choices=Role.choices(), default=Role.ADMIN.value)
+    email = models.EmailField(unique=True,null=False,max_length=255)
+    class Meta:
+        ordering=['id']
+
 
 class BaseModel(models.Model):
     created_date=models.DateTimeField(auto_now_add=True,null=True)
     updated_date=models.DateTimeField(auto_now=True,null=True)
     deleted_date=models.DateTimeField(null=True,blank=True)
     active=models.BooleanField(default=True)
+
     class Meta:
         abstract=True
         ordering=["-id"]
 
+    def soft_delete(self, using=None, keep_parents=False):
+        self.deleted_date = timezone.now()
+        self.active = False
+        self.save(update_fields=['deleted_date', 'active'])
+
+    def restore(self, using=None, keep_parents=False):
+        self.deleted_date = None
+        self.active = True
+        self.save(update_fields=['deleted_date', 'active'])
 
 
 class Alumni(BaseModel):
@@ -35,6 +51,10 @@ class Alumni(BaseModel):
     user = models.OneToOneField(User,on_delete=models.CASCADE)
     def __str__(self):
         return str(self.user)
+
+    def delete(self, *args, **kwargs):
+        self.user.delete()
+        super().delete(*args, **kwargs)
 
 class Teacher(BaseModel):
     must_change_password=models.BooleanField(default=True)
@@ -45,11 +65,15 @@ class Teacher(BaseModel):
 
 class Post(BaseModel):
     content=models.TextField()
-    look_comment=models.BooleanField(default=True)
+    lock_comment=models.BooleanField(default=True)
     user=models.ForeignKey(User,on_delete=models.CASCADE,null=False)
 
     def __str__(self):
         return self.content
+
+    def can_user_comment(self):
+        return not self.lock_comment
+
 
 class PostImage(models.Model):
     image = CloudinaryField('Post Image', null=True, blank=True, folder='socialnetwork')
@@ -64,17 +88,26 @@ class SurveyType(IntEnum):
     @classmethod
     def choices(cls):
         return [(type.value, type.name.replace('_', ' ').capitalize()) for type in cls]
+
+
 class SurveyPost(Post):
-    end_timme=models.DateTimeField()
-    servey_type=models.IntegerField(choices=SurveyType.choices(),default=SurveyType.TRAINING_PROGRAM.value)
+    end_time=models.DateTimeField()
+    survey_type=models.IntegerField(choices=SurveyType.choices(),default=SurveyType.TRAINING_PROGRAM.value)
+
 
 class SurveyQuestion(models.Model):
     question=models.TextField()
     multi_choice = models.BooleanField(default=False)
     survey_post = models.ForeignKey(SurveyPost, on_delete=models.CASCADE, related_name='questions')
 
+    def clean(self):
+        if self.options.count() < 2:
+            raise ValidationError("Each question must have at least 2 options.")
+
     def __str__(self):
         return self.question
+
+
 
 class SurveyOption(models.Model):
     option = models.TextField()
@@ -84,12 +117,14 @@ class SurveyOption(models.Model):
     def __str__(self):
         return self.option
 
+
 class UserSurveyOption(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     survey_option = models.ForeignKey(SurveyOption, on_delete=models.CASCADE)
 
     class Meta:
         unique_together = ('user', 'survey_option')
+
 
 class SurveyDraft(models.Model):
     survey_post = models.ForeignKey(SurveyPost, on_delete=models.CASCADE, related_name='drafts')
@@ -100,13 +135,14 @@ class SurveyDraft(models.Model):
     class Meta:
         unique_together = ('survey_post', 'user')
 
+
 class Group(BaseModel):
     group_name = models.CharField(max_length=255, unique=True)
-
     users = models.ManyToManyField(User, blank=True)
 
     def __str__(self):
         return self.group_name
+
 
 class Interaction(BaseModel):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -115,6 +151,15 @@ class Interaction(BaseModel):
     class Meta:
         abstract = True
 
+
+class InvitationPost(Post):
+    event_name = models.CharField(max_length=255)
+
+    users = models.ManyToManyField(User, blank=True)
+    groups = models.ManyToManyField(Group, blank=True)
+
+    def __str__(self):
+        return self.event_name
 
 class ReactionType(IntEnum):
     LIKE = 1
@@ -132,10 +177,17 @@ class Reaction(Interaction):
     class Meta:
         unique_together = ('user', 'post')
 
+    def __str__(self):
+        return f"{self.user.username} - {ReactionType(self.reaction).name} on Post {self.post.id}"
+
 class Comment(Interaction):
     content = models.TextField(null=False)
     image = CloudinaryField('Comment Image', null=True, blank=True, folder='MangXaHoi')
 
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE)
+
+    def get_replies(self):
+        return Comment.objects.filter(parent=self).order_by("created_date")
+
 
 

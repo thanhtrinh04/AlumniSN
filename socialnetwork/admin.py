@@ -1,7 +1,6 @@
 from django.contrib import admin
 from django.utils.html import mark_safe
-from .models import User, PostImage
-
+from .models import User, PostImage,Post,Comment,SurveyPost,SurveyOption,SurveyQuestion,Group,InvitationPost
 class UserAdmin(admin.ModelAdmin):
     readonly_fields = ['avatar_preview','cover_preview']
     def avatar_preview(self, user):
@@ -17,3 +16,11 @@ class UserAdmin(admin.ModelAdmin):
 
 admin.site.register(User,UserAdmin)
 admin.site.register(PostImage)
+admin.site.register(Post)
+admin.site.register(Comment)
+admin.site.register(SurveyPost)
+admin.site.register(SurveyQuestion)
+admin.site.register(SurveyOption)
+admin.site.register(Group)
+admin.site.register(InvitationPost)
+
