@@ -191,3 +191,13 @@ class Comment(Interaction):
 
 
 
+class EventInvitePost(Post):
+    title = models.CharField(max_length=255)
+    send_to_all = models.BooleanField(default=False)
+    groups = models.ManyToManyField(Group, blank=True)
+    individuals = models.ManyToManyField(User, blank=True, related_name='event_invites')
+
+    def __str__(self):
+        return self.title
+
+

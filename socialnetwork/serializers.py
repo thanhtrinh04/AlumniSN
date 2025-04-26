@@ -169,12 +169,23 @@ class GroupSerializer(serializers.ModelSerializer):
         fields = ['id', 'group_name', 'users', 'created_date', 'updated_date']
 
 
-class InvitationPostSerializer(serializers.ModelSerializer):
-    users = PrimaryKeyRelatedField(many=True, queryset=User.objects.filter(is_active=True), required=False)
-    groups = PrimaryKeyRelatedField(many=True, queryset=Group.objects.filter(active=True), required=False)
-    images = PostImageSerializer(many=True, required=False)
-    user = UserSerializer(read_only=True)
+# class InvitationPostSerializer(serializers.ModelSerializer):
+#     users = PrimaryKeyRelatedField(many=True, queryset=User.objects.filter(is_active=True), required=False)
+#     groups = PrimaryKeyRelatedField(many=True, queryset=Group.objects.filter(active=True), required=False)
+#     images = PostImageSerializer(many=True, required=False)
+#     user = UserSerializer(read_only=True)
+#
+#     class Meta:
+#         model = InvitationPost
+#         fields = ['id', 'event_name', 'content', 'images', 'users', 'groups', 'created_date', 'user']
 
+class GroupSerializer(serializers.ModelSerializer):
     class Meta:
-        model = InvitationPost
-        fields = ['id', 'event_name', 'content', 'images', 'users', 'groups', 'created_date', 'user']
+        model = Group
+        fields = ['group_name', 'users']
+
+class EventInvitePostSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventInvitePost
+        fields = ['title', 'content', 'send_to_all', 'groups', 'individuals', 'created_date']
+
