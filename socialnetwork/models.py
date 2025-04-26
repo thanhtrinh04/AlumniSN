@@ -65,7 +65,7 @@ class Teacher(BaseModel):
 
 class Post(BaseModel):
     content=models.TextField()
-    lock_comment=models.BooleanField(default=True)
+    lock_comment=models.BooleanField(default=False)
     user=models.ForeignKey(User,on_delete=models.CASCADE,null=False)
 
     def __str__(self):

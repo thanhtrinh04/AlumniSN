@@ -15,8 +15,6 @@ from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
 from django.db.models import Count
 from SocialNetworkApp import settings
 from .models import Role, Group, EventInvitePost
-from .serializers import UserSerializer, UserRegisterSerializer, TeacherCreateSerializer, GroupSerializer, \
-    EventInvitePostSerializer
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
@@ -29,7 +27,7 @@ from sendgrid.helpers.mail import Mail
 
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,InvitationPost
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
-    ReactionSerializer, GroupSerializer
+    ReactionSerializer, GroupSerializer,EventInvitePostSerializer
 from .perms import RolePermission,OwnerPermission,CommentDeletePermission
 from cloudinary.uploader import upload
 # from .tasks import send_email_async
@@ -276,7 +274,11 @@ class RegisterAPIView(viewsets.ViewSet, generics.CreateAPIView):
 class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIView):
     queryset = Post.objects.filter(active=True)
     serializer_class = PostSerializer
-    parser_classes = [JSONParser, MultiPartParser]
+
+    def get_parser_classes(self):
+        if self.action in ['create', 'update']:
+            return [JSONParser, MultiPartParser]
+        return [JSONParser]  # Chỉ sử dụng JSONParser cho các phương thức khá
 
     def get_permissions(self):
         if self.action == "create":
@@ -450,7 +452,11 @@ class ReactionViewSet(viewsets.ViewSet, generics.ListAPIView):
 class SurveyPostViewSet(viewsets.ViewSet):
     queryset = SurveyPost.objects.filter(active=True)
     serializer_class = SurveyPostSerializer
-    parser_classes = [JSONParser, MultiPartParser]
+
+    def get_parser_classes(self):
+        if self.action in ['create', 'update']:
+            return [JSONParser, MultiPartParser]
+        return [JSONParser]  # Chỉ sử dụng JSONParser cho các phương thức khá
 
     def get_permissions(self):
         if self.action == "create":
