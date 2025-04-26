@@ -1,44 +1,57 @@
 from datetime import timedelta
-
-from django.core.mail import send_mail
+from email.message import EmailMessage
+from django.core.mail import EmailMessage
 from django.http.multipartparser import MultiPartParser
 from rest_framework.decorators import action
-from rest_framework import parsers, viewsets, generics,permissions,status
-
+from rest_framework import parsers, viewsets, generics, permissions, status
+from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
+from django.db.models import Count
 from SocialNetworkApp import settings
-from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer
+from .models import Role, Group, EventInvitePost
+from .serializers import UserSerializer, UserRegisterSerializer, TeacherCreateSerializer, GroupSerializer, \
+    EventInvitePostSerializer
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from socialnetwork.paginator import UserPagination
-from socialnetwork.perms import IsAdmin,IsSelf,IsOwner,IsAuthenticatedUser,AllowAll
+from socialnetwork.perms import IsAdmin, IsSelf, IsOwner, IsAuthenticatedUser, AllowAll
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.utils import timezone
 
-
 User = get_user_model()
 
-class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIView):
-    queryset = User.objects.filter(is_active=True)
+
+class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
+    queryset = User.objects.filter(is_active=True).order_by('-date_joined')
     serializer_class = UserSerializer
     parser_classes = [parsers.MultiPartParser]
     pagination_class = UserPagination
 
-    # Giới hạn List user cho Admin
+    # Giới hạn cho Admin
     def get_permissions(self):
-        if self.action in ['list', 'unverified_users', 'verify_user']:
+        # Truy cập phương thức và đường dẫn request
+        request = self.request
+
+        # Kiểm tra nhiều endpoint không cho phép phương thức GET
+        if (request.path.endswith('/update_avatar/') or
+            request.path.endswith('/update_cover/') or
+            request.path.endswith('/change_password/')) and request.method == 'GET':
+            from rest_framework.exceptions import MethodNotAllowed
+            raise MethodNotAllowed(request.method)
+
+        if self.action in ['list', 'unverified_users', 'verify_user','create_teacher','set_password_reset_time']:
             return [IsAdmin()]
         else:
             return [IsSelf()]
 
     @action(methods=['get'], url_path='current_user', detail=False, permission_classes=[permissions.IsAuthenticated])
-    def get_current_user(self,request):
-        return Response(UserSerializer(request.user).data,status=status.HTTP_200_OK)
+    def get_current_user(self, request):
+        return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
 
     @action(methods=['patch'], url_path='verify_user', detail=True, permission_classes=[IsAdmin()])
     def verify_user(self, request, pk=None):
         try:
-            user =User.objects.get(pk=pk)
+            user = User.objects.get(pk=pk)
             user.save()
             # Nếu là Alumni thì xác thực trường is_verified
             if hasattr(user, 'alumni'):
@@ -55,8 +68,7 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
         serializer = self.get_serializer(unverified, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['patch'], url_path='change_password',
-            permission_classes=[IsSelf()], parser_classes=[parsers.JSONParser])
+    @action(detail=False, methods=['patch'], url_path='change_password', parser_classes=[parsers.JSONParser])
     def change_password(self, request):
         user = request.user
         old_password = request.data.get('old_password')
@@ -77,7 +89,6 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
         return Response({'message': 'Đổi mật khẩu thành công'}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['patch'], url_path='update_avatar',
-            permission_classes=[IsSelf()],
             parser_classes=[parsers.MultiPartParser])
     def update_avatar(self, request):
         user = request.user
@@ -91,7 +102,6 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
         return Response({'message': 'Cập nhật avatar thành công', 'avatar': user.avatar.url}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['patch'], url_path='update_cover',
-            permission_classes=[IsSelf()],
             parser_classes=[parsers.MultiPartParser])
     def update_cover(self, request):
         user = request.user
@@ -103,6 +113,7 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
         user.cover = cover
         user.save(update_fields=['cover'])  # chỉ cập nhật ảnh bìa
         return Response({'message': 'Cập nhật ảnh bìa thành công', 'cover': user.cover.url}, status=status.HTTP_200_OK)
+
     # ghi đè lại để chỉ lấy 1 số trường nhất định
     def retrieve(self, request, *args, **kwargs):
         try:
@@ -118,7 +129,8 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
         except User.DoesNotExist:
             return Response({'error': 'Không tìm thấy người dùng'}, status=status.HTTP_404_NOT_FOUND)
 
-    @action(detail=False, methods=['post'], url_path='create_teacher', permission_classes=[IsAdmin()])
+    @action(detail=False, methods=['post'], url_path='create_teacher',
+            parser_classes=[parsers.JSONParser, parsers.MultiPartParser])
     def create_teacher(self, request):
         serializer = TeacherCreateSerializer(data=request.data)
         if serializer.is_valid():
@@ -127,7 +139,7 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
             # Soạn nội dung HTML
             html_content = f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
-                <div style="background-color: #673AB7; padding: 20px; color: white; text-align: center;">
+                <div style="background-color: #1d559f; padding: 20px; color: white; text-align: center;">
                     <img src="https://res.cloudinary.com/demo/image/upload/v1700000000/logo.png" alt="Logo" style="height: 50px; margin-bottom: 10px;">
                     <h1 style="margin: 0; font-size: 24px;">MẠNG XÃ HỘI CỰU SINH VIÊN</h1>
                 </div>
@@ -164,7 +176,7 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
                 </div>
 
                 <div style="background-color: #eeeeee; padding: 10px; text-align: center; font-size: 13px;">
-                    © 2025 Mạng xã hội cựu sinh viên | <a href="https://your-university.edu.vn" style="color: #3f51b5;">Truy cập hệ thống</a>
+                    © 2025 AlumniSocialNetwork | <a href="https://your-university.edu.vn" style="color: #3f51b5;">Truy cập hệ thống</a>
                 </div>
             </div>
             """
@@ -188,7 +200,7 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(methods=['patch'], url_path='set_password_reset_time', detail=True, permission_classes=[IsAdmin()])
+    @action(methods=['patch'], url_path='set_password_reset_time', detail=True)
     def set_password_reset_time(self, request, pk=None):
         try:
             user = User.objects.get(pk=pk)
@@ -220,6 +232,7 @@ class UserViewSet(viewsets.ViewSet ,generics.ListAPIView,generics.RetrieveAPIVie
         except User.DoesNotExist:
             return Response({'error': 'Không tìm thấy người dùng'}, status=status.HTTP_404_NOT_FOUND)
 
+
 class RegisterAPIView(viewsets.ViewSet, generics.CreateAPIView):
     serializer_class = UserRegisterSerializer
     permission_classes = [AllowAll]
@@ -233,3 +246,176 @@ class RegisterAPIView(viewsets.ViewSet, generics.CreateAPIView):
                 'user': self.get_serializer(user).data
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GroupViewSet(viewsets.ModelViewSet):
+    queryset = Group.objects.filter(active=True)
+    serializer_class = GroupSerializer
+    permission_classes = [IsAdmin]
+
+
+class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView, generics.RetrieveAPIView,
+                         generics.DestroyAPIView):
+    queryset = EventInvitePost.objects.all()
+    serializer_class = EventInvitePostSerializer
+    permission_classes = [IsAdmin]
+    parser_classes = [parsers.JSONParser]
+
+    def perform_create(self, serializer):
+        post = serializer.save(user=self.request.user)
+
+        subject = "Thư mời tham gia sự kiện từ nhà trường Đại học Mở Thành phố Hồ Chí Minh"
+        message = """<!DOCTYPE html>
+                    <html lang="en">
+                    <head>
+                      <meta charset="UTF-8">
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                      <title>Event Invitation</title>
+                      <style>
+                        body { font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0; }
+                        .email-container { max-width: 600px; margin: 0 auto; border: 1px solid #ddd; }
+                        .email-header { background-color: #1d559f; padding: 20px; text-align: center; color: white; }
+                        .email-body { padding: 20px; background-color: #fff; }
+                        .event-details { background-color: #f9f9f9; border-left: 3px solid #1d559f; padding: 15px; margin: 15px 0; }
+                        .cta-button { display: inline-block; background-color: #1d559f; color: white; padding: 10px 25px; border-radius: 4px; text-decoration: none; font-weight: bold; }
+                        .email-footer { background-color: #f5f5f5; padding: 15px; text-align: center; font-size: 12px; color: #666; }
+                      </style>
+                    </head>
+                    <body>
+                      <div class="email-container">
+                        <div class="email-header">
+                          <h1>You're Invited!</h1>
+                        </div>
+                        <div class="email-body">
+                          <p>Join us for the <strong>"Event"</strong> on June 15, 2025, from 7:00 PM to 11:00 PM at the HCM City OpenUniversity.</p>
+                          <div class="event-details">
+                            <div><strong>Attire:</strong> Formal</div>
+                          </div>
+                          <p>The evening includes speeches, awards, dinner, and entertainment.</p>
+                           <a href="#" class="cta-button">RSVP Now</a>
+                          <p>Best regards,<br>The Events Team</p>
+                        </div>
+                        <div class="email-footer">
+                          <p>© 2025 AlumniSocailNetwork | <a href="#">Unsubscribe</a> | <a href="#">Contact Us</a></p>
+                        </div>
+                      </div>
+                    </body>
+                    </html>"""
+        from_email = settings.DEFAULT_FROM_EMAIL
+
+        recipient_list = set()
+
+        # Gửi cho từng cá nhân nếu có
+        if hasattr(post, 'receivers'):
+            recipient_list |= set(post.receivers.values_list('email', flat=True))
+
+        # Gửi cho người trong các nhóm nếu có
+        if hasattr(post, 'groups'):
+            for group in post.groups.all():
+                recipient_list |= set(group.users.values_list('email', flat=True))
+
+        # Gửi cho tất cả user nếu đánh dấu gửi tới tất cả
+        if getattr(post, 'send_to_all', False):
+            recipient_list |= set(
+                User.objects.exclude(email__isnull=True).exclude(email__exact='').values_list('email', flat=True))
+
+        # Gửi mail
+        if recipient_list:
+            email = EmailMessage(
+                subject=subject,
+                body=message,
+                from_email=from_email,
+                to=list(recipient_list)
+            )
+            email.content_subtype = "html"  # Đảm bảo email có định dạng HTML
+            email.send(fail_silently=True)  # Hoặc False để debug lỗi gửi mail
+
+
+class StatisticsViewSet(viewsets.ViewSet):
+    """
+    ViewSet cho các API thống kê
+    """
+    permission_classes = [IsAdmin]  # Đảm bảo chỉ admin mới có quyền truy cập
+
+    @action(detail=False, methods=['get'], url_path='user_statistics')
+    def user_statistics(self, request):
+        """
+        API thống kê người dùng theo năm, tháng, quý
+        """
+        # Lấy tham số từ query
+        period = request.query_params.get('period', 'month')  # mặc định là tháng
+        year = request.query_params.get('year', timezone.now().year)  # mặc định là năm hiện tại
+        role = request.query_params.get('role', None)  # Tùy chọn lọc theo role
+
+        # Lọc người dùng theo role nếu có
+        users = User.objects.filter(is_active=True)
+        if role is not None:
+            try:
+                role_value = int(role)
+                users = users.filter(role=role_value)
+            except ValueError:
+                return Response({'error': 'Role không hợp lệ'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Thống kê theo từng loại thời gian
+        if period == 'year':
+            # Thống kê theo năm
+            stats = users.annotate(
+                date=TruncYear('date_joined')
+            ).values('date').annotate(
+                count=Count('id')
+            ).order_by('date')
+
+        elif period == 'quarter':
+            # Thống kê theo quý (trong năm đã chọn)
+            stats = users.filter(
+                date_joined__year=year
+            ).annotate(
+                date=TruncQuarter('date_joined')
+            ).values('date').annotate(
+                count=Count('id')
+            ).order_by('date')
+
+        else:  # default: month
+            # Thống kê theo tháng (trong năm đã chọn)
+            stats = users.filter(
+                date_joined__year=year
+            ).annotate(
+                date=TruncMonth('date_joined')
+            ).values('date').annotate(
+                count=Count('id')
+            ).order_by('date')
+
+        # Định dạng dữ liệu trả về cho frontend
+        formatted_stats = []
+
+        for item in stats:
+            stat_item = {}
+            if period == 'year':
+                stat_item['date'] = item['date'].strftime('%Y')
+                stat_item['label'] = item['date'].strftime('%Y')
+            elif period == 'quarter':
+                quarter = (item['date'].month - 1) // 3 + 1
+                stat_item['date'] = item['date'].strftime('%Y-%m-%d')
+                stat_item['label'] = f'Q{quarter} {item["date"].year}'
+            else:
+                stat_item['date'] = item['date'].strftime('%Y-%m-%d')
+                stat_item['label'] = item['date'].strftime('%m/%Y')
+
+            stat_item['count'] = item['count']
+            formatted_stats.append(stat_item)
+
+        # Định dạng dữ liệu cho Chart.js
+        chart_data = {
+            'labels': [item['label'] for item in formatted_stats],
+            'data': [item['count'] for item in formatted_stats],
+        }
+
+        response_data = {
+            'stats': formatted_stats,  # Dữ liệu chi tiết
+            'chart': chart_data,  # Dữ liệu cho biểu đồ
+            'period': period,
+            'year': int(year) if year else None,
+            'role': role
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)

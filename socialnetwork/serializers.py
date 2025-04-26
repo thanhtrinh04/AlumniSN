@@ -91,3 +91,14 @@ class TeacherCreateSerializer(serializers.Serializer):
         )
 
         return user
+
+
+class GroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Group
+        fields = ['group_name', 'users']
+
+class EventInvitePostSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventInvitePost
+        fields = ['title', 'content', 'send_to_all', 'groups', 'individuals', 'created_date']
