@@ -12,10 +12,6 @@ router.register(r'comment', CommentViewSet, basename='comment')
 router.register(r'reaction', ReactionViewSet, basename='reaction')
 router.register(r'survey', SurveyPostViewSet, basename='survey')
 router.register(r'group', GroupViewSet, basename='group')
-
-router.register(r'user', UserViewSet, basename='user')
-router.register(r'register',RegisterAPIView, basename='register')
-router.register(r'groups',GroupViewSet, basename='groups')
 router.register(r'event_invite',EventInviteViewSet, basename='event_invite')
 router.register('statistics', StatisticsViewSet, basename='statistics')
 urlpatterns = [
