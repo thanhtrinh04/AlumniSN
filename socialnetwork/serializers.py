@@ -9,10 +9,28 @@ from rest_framework.serializers import ModelSerializer, PrimaryKeyRelatedField
 
 
 class UserSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(required=False)
+    cover = serializers.ImageField(required=False)
+    is_verified = serializers.SerializerMethodField()
     class Meta:
         model = User
-        fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role']
+        fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role', 'is_verified']
         extra_kwargs = {'password': {'write_only': True}}
+
+    def get_is_verified(self, obj):
+        # Truy xuất is_verified từ alumni_set đã được prefetch
+        if obj.role == 1:  # ALUMNI
+            alumni = obj.alumni  # Sử dụng alumni (được prefetch) để lấy Alumni
+            return alumni.is_verified if alumni else False
+        return None
+
+    def to_representation(self, instance):
+        # Nếu không phải ALUMNI thì loại bỏ trường is_verified
+        data = super().to_representation(instance)
+        if instance.role != 1:  # Nếu không phải ALUMNI
+            data.pop('is_verified', None)
+        return data
+
 
 class UserRegisterSerializer(serializers.ModelSerializer):
         password = serializers.CharField(write_only=True)
@@ -22,11 +40,9 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 
         class Meta:
             model = User
-            fields = ['username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role', 'mssv']
+            fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role', 'mssv']
 
         def validate(self, data):
-            if User.objects.filter(email=data['email']).exists():  # kiểm tra email
-                raise serializers.ValidationError({"email": "Email đã được sử dụng"})
                 # Kiểm tra MSSV
             if data['role'] == Role.ALUMNI.value:
                 if not data.get('mssv'):
@@ -34,8 +50,6 @@ class UserRegisterSerializer(serializers.ModelSerializer):
                     # Kiểm tra MSSV đã tồn tại hay chưa
                 if Alumni.objects.filter(mssv=data['mssv']).exists():
                     raise serializers.ValidationError({'mssv': 'MSSV này đã được đăng ký.'})
-            if data['role'] == Role.ALUMNI.value and not data.get('mssv'):
-                raise serializers.ValidationError({'mssv': 'Vui lòng cung cấp MSSV cho cựu sinh viên.'})
             if data['role'] in [Role.ADMIN.value, Role.TEACHER.value]:
                 raise serializers.ValidationError({'role': 'Không thể đăng ký vai trò này.'})
 
@@ -169,15 +183,6 @@ class GroupSerializer(serializers.ModelSerializer):
         fields = ['id', 'group_name', 'users', 'created_date', 'updated_date']
 
 
-# class InvitationPostSerializer(serializers.ModelSerializer):
-#     users = PrimaryKeyRelatedField(many=True, queryset=User.objects.filter(is_active=True), required=False)
-#     groups = PrimaryKeyRelatedField(many=True, queryset=Group.objects.filter(active=True), required=False)
-#     images = PostImageSerializer(many=True, required=False)
-#     user = UserSerializer(read_only=True)
-#
-#     class Meta:
-#         model = InvitationPost
-#         fields = ['id', 'event_name', 'content', 'images', 'users', 'groups', 'created_date', 'user']
 
 class GroupSerializer(serializers.ModelSerializer):
     class Meta:

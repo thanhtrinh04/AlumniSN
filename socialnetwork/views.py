@@ -13,24 +13,23 @@ from rest_framework import parsers, viewsets, generics, permissions, status
 from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
 from django.db.models import Count
 from SocialNetworkApp import settings
-from .models import Role, Group, EventInvitePost
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from SocialNetworkApp import settings
 
-from socialnetwork.paginator import UserPagination
+from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption
+from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
     ReactionSerializer, GroupSerializer,EventInvitePostSerializer
 from .perms import RolePermission,OwnerPermission,CommentDeletePermission
 from cloudinary.uploader import upload
 # from .tasks import send_email_async
-from socialnetwork.perms import  IsSelf, IsOwner, IsAuthenticatedUser, AllowAll
+from socialnetwork.perms import  IsSelf, IsOwner, IsAuthenticatedUser, AllowAll,IsAdmin
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.utils import timezone
@@ -38,10 +37,11 @@ User = get_user_model()
 
 
 class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
-    queryset = User.objects.filter(is_active=True).order_by('-date_joined')
+    queryset = User.objects.filter(is_active=True).order_by('-date_joined').prefetch_related('alumni')
     serializer_class = UserSerializer
     parser_classes = [parsers.MultiPartParser]
     pagination_class = UserPagination
+    permission_classes = [RolePermission]
 
     # Giới hạn cho Admin
     def get_permissions(self):
@@ -60,11 +60,11 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         else:
             return [IsSelf()]
 
-    @action(methods=['get'], url_path='current_user', detail=False, permission_classes=[permissions.IsAuthenticated])
+    @action(methods=['get'], url_path='current_user', detail=False)
     def get_current_user(self, request):
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
 
-    @action(methods=['patch'], url_path='verify_user', detail=True, permission_classes=[RolePermission([0])])
+    @action(methods=['patch'], url_path='verify_user', detail=True)
     def verify_user(self, request, pk=None):
         try:
             user = User.objects.get(pk=pk)
@@ -78,7 +78,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
             return Response({'error': 'Không tìm thấy người dùng'}, status=status.HTTP_404_NOT_FOUND)
 
     # Lấy những user chưa dc xác thực (dành cho admin)
-    @action(detail=False, methods=['get'], url_path='list_unverified_users', permission_classes=[RolePermission([0])])
+    @action(detail=False, methods=['get'], url_path='list_unverified_users')
     def list_unverified_users(self, request):
         unverified = User.objects.filter(alumni__is_verified=False)
         serializer = self.get_serializer(unverified, many=True)
@@ -105,7 +105,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         return Response({'message': 'Đổi mật khẩu thành công'}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['patch'], url_path='update_avatar',
-            parser_classes=[parsers.MultiPartParser])
+            parser_classes=[parsers.MultiPartParser, parsers.FormParser])
     def update_avatar(self, request):
         user = request.user
         avatar = request.FILES.get('avatar')
@@ -273,6 +273,7 @@ class RegisterAPIView(viewsets.ViewSet, generics.CreateAPIView):
 class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIView):
     queryset = Post.objects.filter(active=True)
     serializer_class = PostSerializer
+    pagination_class = PostPagination
 
     def get_parser_classes(self):
         if self.action in ['create', 'update']:
@@ -614,19 +615,14 @@ class SurveyPostViewSet(viewsets.ViewSet):
         return Response({"message": "Survey submitted successfully."}, status=status.HTTP_201_CREATED)
 
 
-class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView,
-                    generics.RetrieveAPIView, generics.DestroyAPIView, generics.UpdateAPIView):
+class GroupViewSet(viewsets.ModelViewSet):
     queryset = Group.objects.filter(active=True)
     serializer_class = GroupSerializer
-    permission_classes = [RolePermission]
+    pagination_class = GroupPagination
+    permission_classes = RolePermission
 
     def get_permissions(self):
         return [RolePermission([0])]
-
-# class GroupViewSet(viewsets.ModelViewSet):
-#     queryset = Group.objects.filter(active=True)
-#     serializer_class = GroupSerializer
-#     permission_classes = [IsAdmin]
 
 
 class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView, generics.RetrieveAPIView,
@@ -634,7 +630,8 @@ class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.List
     queryset = EventInvitePost.objects.all()
     serializer_class = EventInvitePostSerializer
     permission_classes = [RolePermission]
-    parser_classes = [parsers.JSONParser]
+    pagination_class = PostPagination
+    parser_classes = [parsers.JSONParser, parsers.FormParser, parsers.FormParser,parsers.MultiPartParser]
 
     def get_permissions(self):
         return [RolePermission([0])]

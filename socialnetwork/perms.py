@@ -1,8 +1,8 @@
 from rest_framework import permissions
 
-# class IsAdmin(permissions.IsAdminUser):
-#     def has_permission(self, request, view):
-#         return request.user and request.user.is_staff
+class IsAdmin(permissions.IsAdminUser):
+    def has_permission(self, request, view):
+        return request.user and request.user.is_staff
 
 class RolePermission(permissions.BasePermission):
     def __init__(self,allowed_roles):
@@ -23,14 +23,17 @@ class AllowAll(permissions.AllowAny):
 
 class IsSelf(permissions.IsAuthenticated):
     """
-    Quyền này chỉ cho phép người dùng thay đổi thông tin của chính họ:
-    dùng cho update avatar, cover, password.
+    Quyền này chỉ cho phép người dùng chỉnh sửa chính mình
+    (ví dụ update avatar, cover, password).
     """
     def has_permission(self, request, view):
-        # Kiểm tra xem yêu cầu có phải là của người dùng hiện tại không
-        return request.user and (request.user.pk == view.kwargs.get('pk') or request.user.pk == request.user.pk)
+        # Nếu trong URL có pk, kiểm tra pk == user.pk
+        if 'pk' in view.kwargs:
+            return request.user and str(request.user.pk) == str(view.kwargs['pk'])
+        return True  # Nếu không có pk, vẫn cho phép tiếp tục (chờ kiểm tra object)
 
     def has_object_permission(self, request, view, obj):
+        # Chỉ cho phép nếu object chính là user hiện tại
         return obj == request.user
 
 
