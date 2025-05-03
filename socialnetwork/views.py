@@ -43,6 +43,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     pagination_class = UserPagination
     permission_classes = [RolePermission]
 
+
     # Giới hạn cho Admin
     def get_permissions(self):
         # Truy cập phương thức và đường dẫn request
@@ -60,6 +61,13 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         else:
             return [IsSelf()]
 
+    def get_queryset(self):
+        queryset = self.queryset
+        q= self.request.query_params.get('q')
+        if q:
+            queryset = queryset.filter(first_name__icontains=q)
+
+        return queryset
     @action(methods=['get'], url_path='current_user', detail=False)
     def get_current_user(self, request):
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
@@ -624,6 +632,14 @@ class GroupViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         return [RolePermission([0])]
 
+    def get_queryset(self):
+        queryset = self.queryset
+        q= self.request.query_params.get('q')
+        if q:
+            queryset = queryset.filter(group_name__icontains=q)
+
+        return queryset
+
 
 class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView, generics.RetrieveAPIView,
                          generics.DestroyAPIView):
@@ -639,43 +655,51 @@ class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.List
     def perform_create(self, serializer):
         post = serializer.save(user=self.request.user)
 
-        subject = "Thư mời tham gia sự kiện từ nhà trường Đại học Mở Thành phố Hồ Chí Minh"
-        message = """<!DOCTYPE html>
-                    <html lang="en">
-                    <head>
-                      <meta charset="UTF-8">
-                      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                      <title>Event Invitation</title>
-                      <style>
-                        body { font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0; }
-                        .email-container { max-width: 600px; margin: 0 auto; border: 1px solid #ddd; }
-                        .email-header { background-color: #1d559f; padding: 20px; text-align: center; color: white; }
-                        .email-body { padding: 20px; background-color: #fff; }
-                        .event-details { background-color: #f9f9f9; border-left: 3px solid #1d559f; padding: 15px; margin: 15px 0; }
-                        .cta-button { display: inline-block; background-color: #1d559f; color: white; padding: 10px 25px; border-radius: 4px; text-decoration: none; font-weight: bold; }
-                        .email-footer { background-color: #f5f5f5; padding: 15px; text-align: center; font-size: 12px; color: #666; }
-                      </style>
-                    </head>
-                    <body>
-                      <div class="email-container">
-                        <div class="email-header">
-                          <h1>You're Invited!</h1>
-                        </div>
-                        <div class="email-body">
-                          <p>Join us for the <strong>"Event"</strong> on June 15, 2025, from 7:00 PM to 11:00 PM at the HCM City OpenUniversity.</p>
-                          <div class="event-details">
-                            <div><strong>Attire:</strong> Formal</div>
-                          </div>
-                          <p>The evening includes speeches, awards, dinner, and entertainment.</p>
-                           <a href="#" class="cta-button">RSVP Now</a>
-                          <p>Best regards,<br>The Events Team</p>
-                        </div>
-                        <div class="email-footer">
-                          <p>© 2025 AlumniSocailNetwork | <a href="#">Unsubscribe</a> | <a href="#">Contact Us</a></p>
-                        </div>
-                      </div>
-                    </body>
-                    </html>"""
+        subject = "Thông báo về bài đăng mời tham gia sự kiện sắp tới của Trường Đại Học Mở Thành phố Hồ Chí Minh"
+
+        title = post.title or "Sự kiện từ Trường Đại Học Mở Thành phố Hồ Chí Minh"
+        content = post.content or ""
+        image_html = ""
+        for image in post.images.all():
+            image_html += f"""
+                <div style="text-align:center; margin: 10px 0;">
+                    <img src="{image.image.url}" alt="Event Image" style="max-width:100%; height:auto; border-radius:8px;">
+                </div>
+            """
+        message = f"""<!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Event Invitation</title>
+          <style>
+            body {{ font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0; }}
+            .email-container {{ max-width: 600px; margin: 0 auto; border: 1px solid #ddd; }}
+            .email-header {{ background-color: #1d559f; padding: 20px; text-align: center; color: white; }}
+            .email-body {{ padding: 20px; background-color: #fff; }}
+            .event-details {{ background-color: #f9f9f9; border-left: 3px solid #1d559f; padding: 15px; margin: 15px 0; }}
+            .cta-button {{ display: inline-block; background-color: #1d559f; color: white; padding: 10px 25px; border-radius: 4px; text-decoration: none; font-weight: bold; }}
+            .email-footer {{ background-color: #f5f5f5; padding: 15px; text-align: center; font-size: 12px; color: #666; }}
+          </style>
+        </head>
+        <body>
+          <div class="email-container">
+            <div class="email-header">
+              <h1>Thông báo về bài đăng mời tham gia sự kiện sắp tới của nhà trường</h1>
+            </div>
+            <div class="email-body">
+              <h2>{post.title}</h2>
+              <p>{post.content or ''}</p>
+              {image_html}
+              <a href="#" class="cta-button">Xác nhận tham gia</a>
+              <p>Trân trọng,<br>Trường Đại học Mở TP.HCM</p>
+            </div>
+            <div class="email-footer">
+              <p>© 2025 AlumniSocialNetwork | <a href="#">Liên hệ</a></p>
+            </div>
+          </div>
+        </body>
+        </html>"""
         from_email = settings.DEFAULT_FROM_EMAIL
 
         recipient_list = set()

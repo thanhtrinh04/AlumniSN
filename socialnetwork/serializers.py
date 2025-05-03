@@ -9,7 +9,7 @@ from rest_framework.serializers import ModelSerializer, PrimaryKeyRelatedField
 
 
 class UserSerializer(serializers.ModelSerializer):
-    avatar = serializers.ImageField(required=False)
+    avatar = serializers.ImageField(required=True)
     cover = serializers.ImageField(required=False)
     is_verified = serializers.SerializerMethodField()
     class Meta:
@@ -20,7 +20,7 @@ class UserSerializer(serializers.ModelSerializer):
     def get_is_verified(self, obj):
         # Truy xuất is_verified từ alumni_set đã được prefetch
         if obj.role == 1:  # ALUMNI
-            alumni = obj.alumni  # Sử dụng alumni (được prefetch) để lấy Alumni
+            alumni = getattr(obj, 'alumni', None)  # Tránh lỗi nếu không có liên kết
             return alumni.is_verified if alumni else False
         return None
 
@@ -35,7 +35,7 @@ class UserSerializer(serializers.ModelSerializer):
 class UserRegisterSerializer(serializers.ModelSerializer):
         password = serializers.CharField(write_only=True)
         mssv = serializers.CharField(write_only=True, required=False)
-        avatar = serializers.ImageField(required=False)
+        avatar = serializers.ImageField(required=True)
         cover = serializers.ImageField(required=False)
 
         class Meta:
@@ -187,10 +187,26 @@ class GroupSerializer(serializers.ModelSerializer):
 class GroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Group
-        fields = ['group_name', 'users']
+        fields = ['id','group_name', 'users']
 
 class EventInvitePostSerializer(serializers.ModelSerializer):
+    images = PostImageSerializer(many=True, required=False)
     class Meta:
         model = EventInvitePost
-        fields = ['title', 'content', 'send_to_all', 'groups', 'individuals', 'created_date']
+        fields = ['title','images', 'content', 'send_to_all', 'groups', 'individuals', 'created_date']
 
+    def create(self, validated_data):
+        groups = validated_data.pop('groups', [])
+        individuals = validated_data.pop('individuals', [])
+        images_data = self.context['request'].FILES.getlist('images')
+
+        post = EventInvitePost.objects.create(**validated_data)
+
+        # Gán quan hệ many-to-many
+        post.groups.set(groups)
+        post.individuals.set(individuals)
+
+        for image in images_data:
+            PostImage.objects.create(post=post, image=image)
+
+        return post
