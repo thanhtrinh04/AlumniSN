@@ -18,6 +18,7 @@ from django.contrib import admin
 from django.urls import path,include
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from socialnetwork.admin import my_admin_site
 
 schema_view = get_schema_view(
    openapi.Info(
@@ -30,7 +31,7 @@ schema_view = get_schema_view(
    public=True,
 )
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('admin/', my_admin_site.urls),
     path('',include('socialnetwork.urls')),
     path('o/',include('oauth2_provider.urls')),
     path('swagger<format>/', schema_view.without_ui(cache_timeout=0), name='schema-json'),
