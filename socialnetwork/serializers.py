@@ -210,3 +210,13 @@ class EventInvitePostSerializer(serializers.ModelSerializer):
             PostImage.objects.create(post=post, image=image)
 
         return post
+
+class ChatRoomSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatRoom
+        fields = ['id', 'users', 'last_message', 'last_message_time']
+
+class MessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Message
+        fields = ['id', 'chat_room', 'sender', 'content', 'is_read', 'created_date']

@@ -192,4 +192,21 @@ class EventInvitePost(Post):
     def __str__(self):
         return self.title
 
+class ChatRoom(BaseModel):
+    participants = models.ManyToManyField(User, related_name='chat_rooms')
+    last_message = models.TextField(null=True, blank=True)
+    last_message_time = models.DateTimeField(null=True, blank=True)
+    
+    def __str__(self):
+        return f"Chat Room {self.id}"
+
+class Message(BaseModel):
+    chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    content = models.TextField()
+    is_read = models.BooleanField(default=False)
+    
+    def __str__(self):
+        return f"Message from {self.sender.username} in Room {self.chat_room.id}"
+
 

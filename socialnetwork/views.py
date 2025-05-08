@@ -1,31 +1,26 @@
 from datetime import timedelta
 import json
-from django.core.mail import send_mail
-from django.utils import timezone
-from django.contrib.auth import get_user_model
+from django.db.models.functions.text import Concat
+from django.db.models import Value,CharField
 from rest_framework.parsers import MultiPartParser,JSONParser
-from rest_framework.decorators import action
-from rest_framework import parsers, viewsets, generics,permissions,status
 from email.message import EmailMessage
 from django.core.mail import EmailMessage
 from rest_framework.decorators import action
 from rest_framework import parsers, viewsets, generics, permissions, status
 from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
 from django.db.models import Count
-from SocialNetworkApp import settings
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from SocialNetworkApp import settings
+from .firebase_config import create_chat_room, send_message, get_messages, mark_messages_as_read
 
 from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
 
-from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni
+from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
-    ReactionSerializer, GroupSerializer,EventInvitePostSerializer
+    ReactionSerializer, GroupSerializer,EventInvitePostSerializer, ChatRoomSerializer, MessageSerializer
 from .perms import RolePermission,OwnerPermission,CommentDeletePermission
 from cloudinary.uploader import upload
 # from .tasks import send_email_async
@@ -63,10 +58,11 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
     def get_queryset(self):
         queryset = self.queryset
-        q= self.request.query_params.get('q')
+        q = self.request.query_params.get('q')
         if q:
-            queryset = queryset.filter(first_name__icontains=q)
-
+            queryset = queryset.annotate(
+                full_name=Concat('first_name', Value(' '), 'last_name', output_field=CharField())
+            ).filter(full_name__icontains=q)
         return queryset
     @action(methods=['get'], url_path='current_user', detail=False)
     def get_current_user(self, request):
@@ -166,7 +162,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
             html_content = f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
                 <div style="background-color: #1d559f; padding: 20px; color: white; text-align: center;">
-                    <img src="https://res.cloudinary.com/demo/image/upload/v1700000000/logo.png" alt="Logo" style="height: 50px; margin-bottom: 10px;">
+                    <img src="https://res.cloudinary.com/dx8nciong/image/upload/v1746437801/alumnis_avatar-removebg-preview_ypjmpd.png" alt="Logo" style="height: 50px; margin-bottom: 10px;">
                     <h1 style="margin: 0; font-size: 24px;">MẠNG XÃ HỘI CỰU SINH VIÊN</h1>
                 </div>
 
@@ -623,22 +619,94 @@ class SurveyPostViewSet(viewsets.ViewSet):
         return Response({"message": "Survey submitted successfully."}, status=status.HTTP_201_CREATED)
 
 
-class GroupViewSet(viewsets.ModelViewSet):
+class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
     queryset = Group.objects.filter(active=True)
     serializer_class = GroupSerializer
     pagination_class = GroupPagination
-    permission_classes = RolePermission
+    permission_classes = [RolePermission]
+    lookup_field = 'id'
 
     def get_permissions(self):
         return [RolePermission([0])]
 
     def get_queryset(self):
         queryset = self.queryset
-        q= self.request.query_params.get('q')
+        q = self.request.query_params.get('q')
         if q:
             queryset = queryset.filter(group_name__icontains=q)
-
         return queryset
+
+    def list(self, request, *args, **kwargs):
+        """Lấy danh sách tất cả nhóm"""
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def update(self, request, *args, **kwargs):
+        """Cập nhật thông tin nhóm"""
+        instance = self.get_object()
+        group_name = request.data.get('group_name')
+        users = request.data.get('users', [])
+
+        if group_name:
+            instance.group_name = group_name
+
+        if users:
+            # Xóa tất cả users hiện tại
+            instance.users.clear()
+            # Thêm users mới
+            for user_id in users:
+                try:
+                    user = User.objects.get(id=user_id)
+                    instance.users.add(user)
+                except User.DoesNotExist:
+                    continue
+
+        instance.save()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        """Xóa nhóm"""
+        instance = self.get_object()
+        instance.soft_delete()  # Sử dụng soft delete thay vì xóa hoàn toàn
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'], url_path='add_users')
+    def add_users(self, request, pk=None):
+        """Thêm users vào nhóm"""
+        instance = self.get_object()
+        users = request.data.get('users', [])
+        
+        for user_id in users:
+            try:
+                user = User.objects.get(id=user_id)
+                instance.users.add(user)
+            except User.DoesNotExist:
+                continue
+        
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='remove_users')
+    def remove_users(self, request, pk=None):
+        """Xóa users khỏi nhóm"""
+        instance = self.get_object()
+        users = request.data.get('users', [])
+        
+        for user_id in users:
+            try:
+                user = User.objects.get(id=user_id)
+                instance.users.remove(user)
+            except User.DoesNotExist:
+                continue
+        
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
 
 class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView, generics.RetrieveAPIView,
@@ -691,7 +759,7 @@ class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.List
               <h2>{post.title}</h2>
               <p>{post.content or ''}</p>
               {image_html}
-              <a href="#" class="cta-button">Xác nhận tham gia</a>
+              <a href="#" class="cta-button" style="color: white; text-decoration: none;" onclick="this.style.color='white'">Xác nhận tham gia</a>
               <p>Trân trọng,<br>Trường Đại học Mở TP.HCM</p>
             </div>
             <div class="email-footer">
@@ -730,96 +798,171 @@ class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.List
             email.send(fail_silently=True)  # Hoặc False để debug lỗi gửi mail
 
 
-class StatisticsViewSet(viewsets.ViewSet):
-    """
-    ViewSet cho các API thống kê
-    """
-    permission_classes = [RolePermission]
+# class StatisticsViewSet(viewsets.ViewSet):
+#     """
+#     ViewSet cho các API thống kê
+#     """
+#     permission_classes = [RolePermission]
 
-    def get_permissions(self):
-        return [RolePermission([0])]
+#     def get_permissions(self):
+#         return [RolePermission([0])]
 
-    # Đảm bảo chỉ admin mới có quyền truy cập
+#     # Đảm bảo chỉ admin mới có quyền truy cập
 
-    @action(detail=False, methods=['get'], url_path='user_statistics')
-    def user_statistics(self, request):
-        """
-        API thống kê người dùng theo năm, tháng, quý
-        """
-        # Lấy tham số từ query
-        period = request.query_params.get('period', 'month')  # mặc định là tháng
-        year = request.query_params.get('year', timezone.now().year)  # mặc định là năm hiện tại
-        role = request.query_params.get('role', None)  # Tùy chọn lọc theo role
+#     @action(detail=False, methods=['get'], url_path='user_statistics')
+#     def user_statistics(self, request):
+#         """
+#         API thống kê người dùng theo năm, tháng, quý
+#         """
+#         # Lấy tham số từ query
+#         period = request.query_params.get('period', 'month')  # mặc định là tháng
+#         year = request.query_params.get('year', timezone.now().year)  # mặc định là năm hiện tại
+#         role = request.query_params.get('role', None)  # Tùy chọn lọc theo role
 
-        # Lọc người dùng theo role nếu có
-        users = User.objects.filter(is_active=True)
-        if role is not None:
-            try:
-                role_value = int(role)
-                users = users.filter(role=role_value)
-            except ValueError:
-                return Response({'error': 'Role không hợp lệ'}, status=status.HTTP_400_BAD_REQUEST)
+#         # Lọc người dùng theo role nếu có
+#         users = User.objects.filter(is_active=True)
+#         if role is not None:
+#             try:
+#                 role_value = int(role)
+#                 users = users.filter(role=role_value)
+#             except ValueError:
+#                 return Response({'error': 'Role không hợp lệ'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Thống kê theo từng loại thời gian
-        if period == 'year':
-            # Thống kê theo năm
-            stats = users.annotate(
-                date=TruncYear('date_joined')
-            ).values('date').annotate(
-                count=Count('id')
-            ).order_by('date')
+#         # Thống kê theo từng loại thời gian
+#         if period == 'year':
+#             # Thống kê theo năm
+#             stats = users.annotate(
+#                 date=TruncYear('date_joined')
+#             ).values('date').annotate(
+#                 count=Count('id')
+#             ).order_by('date')
 
-        elif period == 'quarter':
-            # Thống kê theo quý (trong năm đã chọn)
-            stats = users.filter(
-                date_joined__year=year
-            ).annotate(
-                date=TruncQuarter('date_joined')
-            ).values('date').annotate(
-                count=Count('id')
-            ).order_by('date')
+#         elif period == 'quarter':
+#             # Thống kê theo quý (trong năm đã chọn)
+#             stats = users.filter(
+#                 date_joined__year=year
+#             ).annotate(
+#                 date=TruncQuarter('date_joined')
+#             ).values('date').annotate(
+#                 count=Count('id')
+#             ).order_by('date')
 
-        else:  # default: month
-            # Thống kê theo tháng (trong năm đã chọn)
-            stats = users.filter(
-                date_joined__year=year
-            ).annotate(
-                date=TruncMonth('date_joined')
-            ).values('date').annotate(
-                count=Count('id')
-            ).order_by('date')
+#         else:  # default: month
+#             # Thống kê theo tháng (trong năm đã chọn)
+#             stats = users.filter(
+#                 date_joined__year=year
+#             ).annotate(
+#                 date=TruncMonth('date_joined')
+#             ).values('date').annotate(
+#                 count=Count('id')
+#             ).order_by('date')
 
-        # Định dạng dữ liệu trả về cho frontend
-        formatted_stats = []
+#         # Định dạng dữ liệu trả về cho frontend
+#         formatted_stats = []
 
-        for item in stats:
-            stat_item = {}
-            if period == 'year':
-                stat_item['date'] = item['date'].strftime('%Y')
-                stat_item['label'] = item['date'].strftime('%Y')
-            elif period == 'quarter':
-                quarter = (item['date'].month - 1) // 3 + 1
-                stat_item['date'] = item['date'].strftime('%Y-%m-%d')
-                stat_item['label'] = f'Q{quarter} {item["date"].year}'
-            else:
-                stat_item['date'] = item['date'].strftime('%Y-%m-%d')
-                stat_item['label'] = item['date'].strftime('%m/%Y')
+#         for item in stats:
+#             stat_item = {}
+#             if period == 'year':
+#                 stat_item['date'] = item['date'].strftime('%Y')
+#                 stat_item['label'] = item['date'].strftime('%Y')
+#             elif period == 'quarter':
+#                 quarter = (item['date'].month - 1) // 3 + 1
+#                 stat_item['date'] = item['date'].strftime('%Y-%m-%d')
+#                 stat_item['label'] = f'Q{quarter} {item["date"].year}'
+#             else:
+#                 stat_item['date'] = item['date'].strftime('%Y-%m-%d')
+#                 stat_item['label'] = item['date'].strftime('%m/%Y')
 
-            stat_item['count'] = item['count']
-            formatted_stats.append(stat_item)
+#             stat_item['count'] = item['count']
+#             formatted_stats.append(stat_item)
 
-        # Định dạng dữ liệu cho Chart.js
-        chart_data = {
-            'labels': [item['label'] for item in formatted_stats],
-            'data': [item['count'] for item in formatted_stats],
-        }
+#         # Định dạng dữ liệu cho Chart.js
+#         chart_data = {
+#             'labels': [item['label'] for item in formatted_stats],
+#             'data': [item['count'] for item in formatted_stats],
+#         }
 
-        response_data = {
-            'stats': formatted_stats,  # Dữ liệu chi tiết
-            'chart': chart_data,  # Dữ liệu cho biểu đồ
-            'period': period,
-            'year': int(year) if year else None,
-            'role': role
-        }
+#         response_data = {
+#             'stats': formatted_stats,  # Dữ liệu chi tiết
+#             'chart': chart_data,  # Dữ liệu cho biểu đồ
+#             'period': period,
+#             'year': int(year) if year else None,
+#             'role': role
+#         }
 
-        return Response(response_data, status=status.HTTP_200_OK)
+#         return Response(response_data, status=status.HTTP_200_OK)
+
+class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChatRoomSerializer
+    queryset = ChatRoom.objects.all()
+    lookup_field = 'id'
+
+    def get_queryset(self):
+        return ChatRoom.objects.filter(participants=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        """Lấy danh sách tất cả phòng chat của người dùng hiện tại"""
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def create(self, request, *args, **kwargs):
+        """Tạo phòng chat mới với người dùng khác"""
+        other_user_id = request.data.get('user_id')
+        if not other_user_id:
+            return Response({'error': 'Vui lòng cung cấp ID người dùng'}, status=status.HTTP_400_BAD_REQUEST)
+
+        other_user = get_object_or_404(User, id=other_user_id)
+        
+        # Kiểm tra xem phòng chat đã tồn tại chưa
+        existing_room = ChatRoom.objects.filter(
+            participants=request.user
+        ).filter(
+            participants=other_user
+        ).first()
+
+        if existing_room:
+            return Response(ChatRoomSerializer(existing_room).data)
+
+        # Tạo phòng chat mới
+        chat_room = ChatRoom.objects.create()
+        chat_room.participants.add(request.user, other_user)
+        
+        # Tạo phòng chat trong Firebase
+        create_chat_room(chat_room.id, [request.user, other_user])
+        
+        return Response(ChatRoomSerializer(chat_room).data)
+
+    @action(detail=True, methods=['get'], url_path='get_messages')
+    def get_messages(self, request, pk=None):
+        """Lấy tin nhắn từ một phòng chat cụ thể"""
+        chat_room = get_object_or_404(ChatRoom, id=pk, participants=request.user)
+        
+        # Đánh dấu tin nhắn đã đọc
+        mark_messages_as_read(pk, request.user.id)
+        
+        # Lấy tin nhắn từ Firebase
+        messages = get_messages(pk)
+        return Response(messages)
+
+    @action(detail=True, methods=['post'], url_path='send_message')
+    def send_message(self, request, pk=None):
+        """Gửi tin nhắn đến phòng chat"""
+        chat_room = get_object_or_404(ChatRoom, id=pk, participants=request.user)
+        content = request.data.get('content')
+        
+        if not content:
+            return Response({'error': 'Vui lòng nhập nội dung tin nhắn'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Lưu tin nhắn vào Firebase
+        message = send_message(pk, request.user.id, content)
+        
+        # Lưu tin nhắn vào database
+        db_message = Message.objects.create(
+            chat_room=chat_room,
+            sender=request.user,
+            content=content
+        )
+        
+        return Response(MessageSerializer(db_message).data)

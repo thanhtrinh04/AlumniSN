@@ -51,8 +51,12 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_yasg',
     'sendgrid',
-
+    'ckeditor',
+    'ckeditor_uploader',
 ]
+
+
+
 import pymysql
 pymysql.install_as_MySQLdb()
 
