@@ -28,6 +28,7 @@ from socialnetwork.perms import  IsSelf, IsOwner, IsAuthenticatedUser, AllowAll,
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.utils import timezone
+from django.db import models
 User = get_user_model()
 
 
@@ -677,7 +678,7 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'], url_path='add_users')
-    def add_users(self, request, pk=None):
+    def add_users(self, request, id=None):
         """Thêm users vào nhóm"""
         instance = self.get_object()
         users = request.data.get('users', [])
@@ -693,7 +694,7 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='remove_users')
-    def remove_users(self, request, pk=None):
+    def remove_users(self, request, id=None):
         """Xóa users khỏi nhóm"""
         instance = self.get_object()
         users = request.data.get('users', [])
@@ -899,7 +900,9 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
     lookup_field = 'id'
 
     def get_queryset(self):
-        return ChatRoom.objects.filter(participants=self.request.user)
+        return ChatRoom.objects.filter(
+            models.Q(user1=self.request.user) | models.Q(user2=self.request.user)
+        )
 
     def list(self, request, *args, **kwargs):
         """Lấy danh sách tất cả phòng chat của người dùng hiện tại"""
@@ -909,25 +912,29 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
 
     def create(self, request, *args, **kwargs):
         """Tạo phòng chat mới với người dùng khác"""
-        other_user_id = request.data.get('user_id')
-        if not other_user_id:
-            return Response({'error': 'Vui lòng cung cấp ID người dùng'}, status=status.HTTP_400_BAD_REQUEST)
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response(
+                {'error': 'Vui lòng cung cấp ID của người dùng'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        other_user = get_object_or_404(User, id=other_user_id)
+        other_user = get_object_or_404(User, id=user_id)
         
         # Kiểm tra xem phòng chat đã tồn tại chưa
         existing_room = ChatRoom.objects.filter(
-            participants=request.user
-        ).filter(
-            participants=other_user
+            models.Q(user1=request.user, user2=other_user) |
+            models.Q(user1=other_user, user2=request.user)
         ).first()
 
         if existing_room:
             return Response(ChatRoomSerializer(existing_room).data)
 
         # Tạo phòng chat mới
-        chat_room = ChatRoom.objects.create()
-        chat_room.participants.add(request.user, other_user)
+        chat_room = ChatRoom.objects.create(
+            user1=request.user,
+            user2=other_user
+        )
         
         # Tạo phòng chat trong Firebase
         create_chat_room(chat_room.id, [request.user, other_user])
@@ -935,28 +942,41 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
         return Response(ChatRoomSerializer(chat_room).data)
 
     @action(detail=True, methods=['get'], url_path='get_messages')
-    def get_messages(self, request, pk=None):
+    def get_messages(self, request, id=None):
         """Lấy tin nhắn từ một phòng chat cụ thể"""
-        chat_room = get_object_or_404(ChatRoom, id=pk, participants=request.user)
+        chat_room = get_object_or_404(
+            ChatRoom.objects.filter(
+                models.Q(user1=request.user) | models.Q(user2=request.user)
+            ),
+            id=id
+        )
         
         # Đánh dấu tin nhắn đã đọc
-        mark_messages_as_read(pk, request.user.id)
+        mark_messages_as_read(id, request.user.id)
         
         # Lấy tin nhắn từ Firebase
-        messages = get_messages(pk)
+        messages = get_messages(id)
         return Response(messages)
 
     @action(detail=True, methods=['post'], url_path='send_message')
-    def send_message(self, request, pk=None):
+    def send_message(self, request, id=None):
         """Gửi tin nhắn đến phòng chat"""
-        chat_room = get_object_or_404(ChatRoom, id=pk, participants=request.user)
+        chat_room = get_object_or_404(
+            ChatRoom.objects.filter(
+                models.Q(user1=request.user) | models.Q(user2=request.user)
+            ),
+            id=id
+        )
         content = request.data.get('content')
         
         if not content:
-            return Response({'error': 'Vui lòng nhập nội dung tin nhắn'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'Vui lòng nhập nội dung tin nhắn'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Lưu tin nhắn vào Firebase
-        message = send_message(pk, request.user.id, content)
+        message = send_message(id, request.user.id, content)
         
         # Lưu tin nhắn vào database
         db_message = Message.objects.create(

@@ -212,11 +212,34 @@ class EventInvitePostSerializer(serializers.ModelSerializer):
         return post
 
 class ChatRoomSerializer(serializers.ModelSerializer):
+    user1 = UserSerializer(read_only=True)
+    user2 = UserSerializer(read_only=True)
+    last_message = serializers.CharField(read_only=True)
+    last_message_time = serializers.DateTimeField(read_only=True)
+
     class Meta:
         model = ChatRoom
-        fields = ['id', 'users', 'last_message', 'last_message_time']
+        fields = ['id', 'user1', 'user2', 'last_message', 'last_message_time']
+        read_only_fields = ['last_message', 'last_message_time']
+
+    def create(self, validated_data):
+        user_id = self.context['request'].data.get('user_id')
+        if not user_id:
+            raise serializers.ValidationError("Vui lòng cung cấp ID của người dùng")
+            
+        try:
+            user2 = User.objects.get(id=user_id)
+            chat_room = ChatRoom.objects.create(
+                user1=self.context['request'].user,
+                user2=user2
+            )
+            return chat_room
+        except User.DoesNotExist:
+            raise serializers.ValidationError("Người dùng không tồn tại")
 
 class MessageSerializer(serializers.ModelSerializer):
+    sender = UserSerializer(read_only=True)
+    
     class Meta:
         model = Message
         fields = ['id', 'chat_room', 'sender', 'content', 'is_read', 'created_date']
