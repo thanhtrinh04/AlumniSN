@@ -51,8 +51,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_yasg',
     'sendgrid',
-    'ckeditor',
-    'ckeditor_uploader',
+    # 'ckeditor',
+    # 'ckeditor_uploader',
 ]
 
 
