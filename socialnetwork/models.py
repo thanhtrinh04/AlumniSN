@@ -138,7 +138,7 @@ class SurveyDraft(models.Model):
 
 class Group(BaseModel):
     group_name = models.CharField(max_length=255, unique=True)
-    users = models.ManyToManyField(User, blank=True)
+    users = models.ManyToManyField(User, blank=True, related_name='my_groups')
 
     def __str__(self):
         return self.group_name

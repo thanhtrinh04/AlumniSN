@@ -217,9 +217,17 @@ class SurveyDraftSerializer(serializers.ModelSerializer):
 
 
 class GroupSerializer(serializers.ModelSerializer):
+    user_count= serializers.IntegerField(read_only=True)
+    class Meta:
+        model = Group
+        fields = ['id', 'group_name', 'user_count','users', 'created_date', 'updated_date']
+
+class GroupDetailSerializer(serializers.ModelSerializer):
+    users = UserSerializer(many=True, read_only=True)
     class Meta:
         model = Group
         fields = ['id', 'group_name', 'users', 'created_date', 'updated_date']
+
 
 
 

@@ -20,7 +20,7 @@ from socialnetwork.paginator import UserPagination,PostPagination,GroupPaginatio
 
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
-    ReactionSerializer, GroupSerializer,EventInvitePostSerializer, ChatRoomSerializer, MessageSerializer
+    ReactionSerializer, GroupSerializer,GroupDetailSerializer,EventInvitePostSerializer, ChatRoomSerializer, MessageSerializer
 from .perms import RolePermission,OwnerPermission,CommentDeletePermission
 from cloudinary.uploader import upload
 # from .tasks import send_email_async
@@ -67,10 +67,22 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     def get_queryset(self):
         queryset = self.queryset
         q = self.request.query_params.get('q')
+        role = self.request.query_params.get('role')
+        
+        # Lọc theo role nếu được cung cấp
+        if role is not None:
+            try:
+                role_value = int(role)
+                queryset = queryset.filter(role=role_value)
+            except ValueError:
+                pass
+                
+        # Tìm kiếm theo tên
         if q:
             queryset = queryset.annotate(
                 full_name=Concat('first_name', Value(' '), 'last_name', output_field=CharField())
             ).filter(full_name__icontains=q)
+            
         return queryset
     @action(methods=['get'], url_path='current_user', detail=False)
     def get_current_user(self, request):
@@ -155,7 +167,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     # ghi đè lại để chỉ lấy 1 số trường nhất định
     def retrieve(self, request, *args, **kwargs):
         try:
-            user = self.get_object()
+            user = self.get_object().prefetch_related('my_groups').all()
             data = {
                 "first_name": user.first_name,
                 "last_name": user.last_name,
@@ -660,24 +672,26 @@ class SurveyPostViewSet(viewsets.ViewSet):
 
 
 class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
-    queryset = Group.objects.filter(active=True)
-    serializer_class = GroupSerializer
+    queryset = Group.objects.filter(active=True).order_by('-created_date').prefetch_related('users')
     pagination_class = GroupPagination
     permission_classes = [RolePermission]
-    lookup_field = 'id'
-
+    
+    def get_serializer_class(self):
+        if self.action in ['list', 'create', 'update']:
+            return GroupSerializer
+        return GroupDetailSerializer
     def get_permissions(self):
         return [RolePermission([0])]
 
     def get_queryset(self):
-        queryset = self.queryset
+
+        queryset = self.queryset.annotate(user_count=Count('users'))
         q = self.request.query_params.get('q')
         if q:
             queryset = queryset.filter(group_name__icontains=q)
         return queryset
 
     def list(self, request, *args, **kwargs):
-        """Lấy danh sách tất cả nhóm"""
         queryset = self.get_queryset()
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -686,8 +700,56 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
+    def retrieve(self, request, *args, **kwargs):
+        # Lấy instance nhóm
+        instance = self.get_object()
+        # Lấy tham số tìm kiếm và phân trang cho người dùng
+        q = request.query_params.get('q')
+        
+        # Lấy queryset người dùng của nhóm
+        users_queryset = instance.users.all().order_by('-date_joined')
+        
+        # Xử lý tìm kiếm nếu có từ khóa
+        if q:
+            users_queryset = users_queryset.annotate(
+                full_name=Concat('last_name', Value(' '), 'first_name', output_field=CharField())
+            ).filter(
+                full_name__icontains=q
+            )
+        
+        # Sử dụng paginator cho người dùng
+        paginator = OptionUserPagination()
+        # Serialize nhóm
+        group_serializer = self.get_serializer(instance)
+        # Lấy dữ liệu người dùng được phân trang
+        page = paginator.paginate_queryset(users_queryset, request)
+        # Chuẩn bị dữ liệu trả về
+        response_data = group_serializer.data
+        # Nếu có phân trang
+        if page is not None:
+            # Serialize người dùng
+            users_serializer = UserSerializer(
+                page, 
+                many=True, 
+                context={'request': request, 'view': self}
+            )
+            
+            # Thêm thông tin người dùng và phân trang vào response
+            return paginator.get_paginated_response({
+                **response_data,
+                'users': users_serializer.data
+            })
+        # Nếu không phân trang
+        users_serializer = UserSerializer(
+            users_queryset, 
+            many=True, 
+            context={'request': request, 'view': self}
+        )
+        response_data['users'] = users_serializer.data
+        
+        return Response(response_data, status=status.HTTP_200_OK)    
+
     def update(self, request, *args, **kwargs):
-        """Cập nhật thông tin nhóm"""
         instance = self.get_object()
         group_name = request.data.get('group_name')
         users = request.data.get('users', [])
@@ -711,14 +773,14 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
-        """Xóa nhóm"""
+        # Xoá nhóm
         instance = self.get_object()
         instance.soft_delete()  # Sử dụng soft delete thay vì xóa hoàn toàn
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'], url_path='add_users')
     def add_users(self, request, id=None):
-        """Thêm users vào nhóm"""
+        # Thêm users vào nhóm
         instance = self.get_object()
         users = request.data.get('users', [])
         
