@@ -46,7 +46,7 @@ class BaseModel(models.Model):
 
 
 class Alumni(BaseModel):
-    mssv=models.CharField(max_length=10,unique=True)
+    mssv=models.CharField(max_length=10,unique=True,null=False)
     is_verified=models.BooleanField(default=False )
     user = models.OneToOneField(User,on_delete=models.CASCADE)
     def __str__(self):

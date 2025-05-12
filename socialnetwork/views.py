@@ -15,8 +15,8 @@ from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from SocialNetworkApp import settings
 from .firebase_config import create_chat_room, send_message, get_messages, mark_messages_as_read
-
-from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination
+from django.http import JsonResponse
+from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination,OptionUserPagination
 
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
@@ -29,13 +29,17 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.utils import timezone
 from django.db import models
+from oauth2_provider.views import TokenView 
+from django.contrib.auth import authenticate
 User = get_user_model()
 
 
 class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
-    queryset = User.objects.filter(is_active=True).order_by('-date_joined').prefetch_related('alumni')
+    queryset = User.objects.filter(is_active=True)\
+        .order_by('-date_joined')\
+        .select_related('alumni', 'teacher')
     serializer_class = UserSerializer
-    parser_classes = [parsers.MultiPartParser]
+    parser_classes = [parsers.MultiPartParser,parsers.JSONParser]
     pagination_class = UserPagination
     permission_classes = [RolePermission]
 
@@ -48,11 +52,14 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         # Kiểm tra nhiều endpoint không cho phép phương thức GET
         if (request.path.endswith('/update_avatar/') or
             request.path.endswith('/update_cover/') or
-            request.path.endswith('/change_password/')) and request.method == 'GET':
+            request.path.endswith('/change_password/')or 
+            request.path.endswith('/create_teacher/')) and request.method == 'GET':
             from rest_framework.exceptions import MethodNotAllowed
             raise MethodNotAllowed(request.method)
 
-        if self.action in ['list', 'unverified_users', 'verify_user','create_teacher','set_password_reset_time']:
+        if self.action in ['list', 'retrieve']:
+            return [IsAuthenticated()]
+        elif self.action in ['unverified_users', 'verify_user','create_teacher','set_password_reset_time','teachers_expired_password_reset']:
             return [RolePermission([0])]
         else:
             return [IsSelf()]
@@ -85,8 +92,18 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     # Lấy những user chưa dc xác thực (dành cho admin)
     @action(detail=False, methods=['get'], url_path='list_unverified_users')
     def list_unverified_users(self, request):
-        unverified = User.objects.filter(alumni__is_verified=False)
-        serializer = self.get_serializer(unverified, many=True)
+        q = request.query_params.get('q')
+        queryset = User.objects.select_related('alumni').filter(alumni__is_verified=False).order_by('-date_joined')
+        if q:
+            queryset = queryset.annotate(
+                full_name=Concat('last_name', Value(' '), 'first_name', output_field=CharField())
+            ).filter(full_name__icontains=q)
+        paginator = OptionUserPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        if page is not None:
+            serializer = UserSerializer(page, many=True, context={'request': request, 'view': self})
+            return paginator.get_paginated_response(serializer.data)
+        serializer = UserSerializer(queryset, many=True, context={'request': request, 'view': self})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['patch'], url_path='change_password', parser_classes=[parsers.JSONParser])
@@ -110,7 +127,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         return Response({'message': 'Đổi mật khẩu thành công'}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['patch'], url_path='update_avatar',
-            parser_classes=[parsers.MultiPartParser, parsers.FormParser])
+            parser_classes=[parsers.MultiPartParser])
     def update_avatar(self, request):
         user = request.user
         avatar = request.FILES.get('avatar')
@@ -152,10 +169,9 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
 
     # @action(detail=False, methods=['post'], url_path='create_teacher', permission_classes=[RolePermission([0])])
-    @action(detail=False, methods=['post'], url_path='create_teacher',
-            parser_classes=[parsers.JSONParser, parsers.MultiPartParser])
+    @action(detail=False, methods=['post'], url_path='create_teacher',serializer_class=TeacherCreateSerializer)
     def create_teacher(self, request):
-        serializer = TeacherCreateSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
 
@@ -218,13 +234,36 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
             except Exception as e:
                 return Response({'error': f'Lỗi gửi email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            return Response({'message': 'Đã cấp tài khoản giảng viên và gửi email thông báo'},
-                            status=status.HTTP_201_CREATED)
+            return Response({
+                'message': 'Đã cấp tài khoản giảng viên và gửi email thông báo',
+                'user': serializer.data
+            }, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-    # @action(methods=['patch'], url_path='set_password_reset_time', detail=True, permission_classes=[RolePermission([0])])
+    @action(detail=False, methods=['get'], url_path='teachers_expired_password_reset')
+    def teachers_expired_password_reset(self, request):
+        now = timezone.now()
+        # Lọc các giáo viên có password_reset_time không rỗng và đã quá 24h
+        q = request.query_params.get('q')
+        queryset = User.objects.select_related('teacher').filter(
+            teacher__must_change_password=True,
+            teacher__password_reset_time__lt=now).order_by('-date_joined')
+        if q:
+            queryset = queryset.annotate(
+                full_name=Concat('last_name', Value(' '), 'first_name', output_field=CharField())
+            ).filter(full_name__icontains=q)
+        paginator = OptionUserPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        if page is not None:
+            serializer = UserSerializer(page, many=True, context={'request': request, 'view': self})
+            return paginator.get_paginated_response(serializer.data)
+        serializer = UserSerializer(queryset, many=True, context={'request': request, 'view': self})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+       
     @action(methods=['patch'], url_path='set_password_reset_time', detail=True)
 
     def set_password_reset_time(self, request, pk=None):
@@ -252,7 +291,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
             return Response({
                 'message': f'Đã thiết lập thời gian đổi mật khẩu: {hours} giờ',
-                'password_reset_deadline': reset_time
+                'password_reset_deadline': reset_time,
             }, status=status.HTTP_200_OK)
 
         except User.DoesNotExist:
@@ -986,3 +1025,15 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
         )
         
         return Response(MessageSerializer(db_message).data)
+
+# class CustomTokenView(TokenView):
+#     def post(self, request, *args, **kwargs):
+#         username = request.POST.get('username')
+#         password = request.POST.get('password')
+#         user = authenticate(username=username, password=password)
+#         if user and hasattr(user, 'teacher') and user.teacher.must_change_password:
+#             if user.teacher.password_reset_time and user.teacher.password_reset_time < timezone.now():
+#                 user.is_active = False
+#                 user.save(update_fields=['is_active'])
+#                 return JsonResponse({'error': 'Tài khoản đã bị khóa do quá hạn đổi mật khẩu.'}, status=403)
+#         return super().post(request, *args, **kwargs)

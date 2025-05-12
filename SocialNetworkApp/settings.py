@@ -193,3 +193,7 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
 CELERY_IMPORTS = ('socialnetwork.tasks',)
+
+
+ALLOWED_HOSTS=['192.168.1.49']
+

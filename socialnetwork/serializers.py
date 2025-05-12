@@ -5,6 +5,9 @@ from rest_framework import serializers
 from .models import *
 from django.contrib.auth import get_user_model
 from rest_framework.serializers import ModelSerializer, PrimaryKeyRelatedField
+from cloudinary.uploader import upload as cloudinary_upload
+import os
+from django.conf import settings
 # User = get_user_model()
 
 
@@ -12,9 +15,12 @@ class UserSerializer(serializers.ModelSerializer):
     avatar = serializers.ImageField(required=True)
     cover = serializers.ImageField(required=False)
     is_verified = serializers.SerializerMethodField()
+    password_reset_time = serializers.SerializerMethodField()
+    must_change_password = serializers.SerializerMethodField()
+    mssv = serializers.SerializerMethodField()
     class Meta:
         model = User
-        fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role', 'is_verified']
+        fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role', 'is_verified', 'password_reset_time', 'must_change_password', 'mssv']
         extra_kwargs = {'password': {'write_only': True}}
 
     def get_is_verified(self, obj):
@@ -24,60 +30,77 @@ class UserSerializer(serializers.ModelSerializer):
             return alumni.is_verified if alumni else False
         return None
 
+    def get_mssv(self, obj):
+        if obj.role == 1:
+            alumni = getattr(obj, 'alumni', None)
+            return alumni.mssv if alumni else None
+        return None
+
+    def get_password_reset_time(self, obj):
+        if obj.role == 2 and hasattr(obj, 'teacher'):
+            return obj.teacher.password_reset_time
+        return None
+
+    def get_must_change_password(self, obj):
+        if obj.role == 2 and hasattr(obj, 'teacher'):
+            return obj.teacher.must_change_password
+        return None
+
     def to_representation(self, instance):
-        # Nếu không phải ALUMNI thì loại bỏ trường is_verified
         data = super().to_representation(instance)
+        view = self.context.get('view')
+        action = getattr(view, 'action', None)
+        # Loại bỏ 'cover' khi action là 'list'
+        if action in ['list', 'list_unverified_users', 'teachers_expired_password_reset']:
+            data.pop('cover', None)
         if instance.role != 1:  # Nếu không phải ALUMNI
             data.pop('is_verified', None)
+            data.pop('mssv', None)
+        if instance.role != 2:  # Nếu không phải TEACHER
+            data.pop('password_reset_time', None)
+            data.pop('must_change_password', None)
         return data
 
 
 class UserRegisterSerializer(serializers.ModelSerializer):
-        password = serializers.CharField(write_only=True)
-        mssv = serializers.CharField(write_only=True, required=False)
-        avatar = serializers.ImageField(required=True)
-        cover = serializers.ImageField(required=False)
+    password = serializers.CharField(write_only=True)
+    mssv = serializers.CharField(write_only=True, required=True)
+    avatar = serializers.ImageField(required=True)
+    cover = serializers.ImageField(required=False)
 
-        class Meta:
-            model = User
-            fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'role', 'mssv']
+    class Meta:
+        model = User
+        fields = ['id','username', 'password', 'email', 'first_name', 'last_name', 'avatar', 'cover', 'mssv']
 
-        def validate(self, data):
-                # Kiểm tra MSSV
-            if data['role'] == Role.ALUMNI.value:
-                if not data.get('mssv'):
-                    raise serializers.ValidationError({'mssv': 'Vui lòng cung cấp MSSV cho cựu sinh viên.'})
-                    # Kiểm tra MSSV đã tồn tại hay chưa
-                if Alumni.objects.filter(mssv=data['mssv']).exists():
-                    raise serializers.ValidationError({'mssv': 'MSSV này đã được đăng ký.'})
-            if data['role'] in [Role.ADMIN.value, Role.TEACHER.value]:
-                raise serializers.ValidationError({'role': 'Không thể đăng ký vai trò này.'})
+    def validate(self, data):
+        # Kiểm tra MSSV
+        if not data.get('mssv'):
+            raise serializers.ValidationError({'mssv': 'Vui lòng cung cấp MSSV cho cựu sinh viên.'})
+        # Kiểm tra MSSV đã tồn tại hay chưa
+        if Alumni.objects.filter(mssv=data['mssv']).exists():
+            raise serializers.ValidationError({'mssv': 'MSSV này đã được đăng ký.'})
+        # Kiểm tra có avatar hay không (để hiển thị thông báo lỗi rõ ràng hơn)
+        if 'avatar' not in data or not data['avatar']:
+            raise serializers.ValidationError({'avatar': 'Vui lòng tải lên ảnh đại diện.'})
+        return data
 
-            # Kiểm tra có avatar hay không (để hiển thị thông báo lỗi rõ ràng hơn)
-            if 'avatar' not in data or not data['avatar']:
-                raise serializers.ValidationError({'avatar': 'Vui lòng tải lên ảnh đại diện.'})
-
-            return data
-
-        def create(self, validated_data):
-            role = validated_data['role']
-            mssv = validated_data.pop('mssv', None)
-            password = validated_data.pop('password')
-
-            user = User(**validated_data)
-            user.set_password(password)
-            user.save()
-
-            if role == Role.ALUMNI.value:
-                Alumni.objects.create(user=user, mssv=mssv)
-
-            return user
+    def create(self, validated_data):
+        mssv = validated_data.pop('mssv', None)
+        password = validated_data.pop('password')
+        user = User(**validated_data)
+        user.set_password(password)
+        user.role = Role.ALUMNI.value  # Mặc định là ALUMNI
+        user.save()
+        Alumni.objects.create(user=user, mssv=mssv)
+        return user
 
 
-class TeacherCreateSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    first_name = serializers.CharField()
-    last_name = serializers.CharField()
+class TeacherCreateSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(read_only=True)
+    email = serializers.EmailField(required=True)
+    first_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=True)
+    avatar = serializers.ImageField(required=False)
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -88,6 +111,17 @@ class TeacherCreateSerializer(serializers.Serializer):
         email = validated_data['email']
         first_name = validated_data['first_name']
         last_name = validated_data['last_name']
+        avatar = validated_data.get('avatar')
+
+        if not avatar:
+            # Đường dẫn tuyệt đối tới file tĩnh
+            static_avatar_path = os.path.join(settings.BASE_DIR, 'socialnetwork', 'static', 'image_default', 'alumni.png')
+            # Upload lên Cloudinary
+            result = cloudinary_upload(static_avatar_path, folder='MangXaHoi')
+            avatar_url = result['secure_url']
+        else:
+            # Nếu có avatar upload, CloudinaryField sẽ tự xử lý
+            avatar_url = avatar
 
         user = User.objects.create(
             username=email,
@@ -95,7 +129,8 @@ class TeacherCreateSerializer(serializers.Serializer):
             first_name=first_name,
             last_name=last_name,
             role=Role.TEACHER.value,
-            password=make_password('ou@123')
+            password=make_password('ou@123'),
+            avatar=avatar_url
         )
 
         Teacher.objects.create(
@@ -105,6 +140,10 @@ class TeacherCreateSerializer(serializers.Serializer):
         )
 
         return user
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'avatar']
 
 
 class PostImageSerializer(ModelSerializer):
@@ -184,11 +223,6 @@ class GroupSerializer(serializers.ModelSerializer):
 
 
 
-class GroupSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Group
-        fields = ['id','group_name', 'users']
-
 class EventInvitePostSerializer(serializers.ModelSerializer):
     images = PostImageSerializer(many=True, required=False)
     class Meta:
@@ -243,3 +277,5 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = ['id', 'chat_room', 'sender', 'content', 'is_read', 'created_date']
+
+
