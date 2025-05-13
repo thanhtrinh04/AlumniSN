@@ -8,7 +8,7 @@ from django.core.mail import EmailMessage
 from rest_framework.decorators import action
 from rest_framework import parsers, viewsets, generics, permissions, status
 from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
-from django.db.models import Count
+from django.db.models import Count,Q
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
@@ -59,7 +59,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
         if self.action in ['list', 'retrieve']:
             return [IsAuthenticated()]
-        elif self.action in ['unverified_users', 'verify_user','create_teacher','set_password_reset_time','teachers_expired_password_reset']:
+        elif self.action in ['destroy','unverified_users', 'verify_user','create_teacher','set_password_reset_time','teachers_expired_password_reset']:
             return [RolePermission([0])]
         else:
             return [IsSelf()]
@@ -76,7 +76,13 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
                 queryset = queryset.filter(role=role_value)
             except ValueError:
                 pass
-                
+        now = timezone.now()
+
+        queryset = queryset.filter(
+            Q(alumni__isnull=True) | Q(alumni__is_verified=True),
+            Q(teacher__isnull=True) | Q(teacher__must_change_password=False) | Q(teacher__password_reset_time__lt=now)
+        )
+
         # Tìm kiếm theo tên
         if q:
             queryset = queryset.annotate(
@@ -167,7 +173,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     # ghi đè lại để chỉ lấy 1 số trường nhất định
     def retrieve(self, request, *args, **kwargs):
         try:
-            user = self.get_object().prefetch_related('my_groups').all()
+            user = self.get_object()
             data = {
                 "first_name": user.first_name,
                 "last_name": user.last_name,
@@ -260,8 +266,9 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         # Lọc các giáo viên có password_reset_time không rỗng và đã quá 24h
         q = request.query_params.get('q')
         queryset = User.objects.select_related('teacher').filter(
+            is_active=True,
             teacher__must_change_password=True,
-            teacher__password_reset_time__lt=now).order_by('-date_joined')
+            teacher__password_reset_time__lt=now).order_by('-date_joined')  
         if q:
             queryset = queryset.annotate(
                 full_name=Concat('last_name', Value(' '), 'first_name', output_field=CharField())
@@ -289,7 +296,6 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
                     return Response({'error': 'Thời gian phải là số dương'}, status=status.HTTP_400_BAD_REQUEST)
             except ValueError:
                 return Response({'error': 'Thời gian phải là số nguyên'}, status=status.HTTP_400_BAD_REQUEST)
-
             # Kiểm tra xem user có phải là giáo viên không
             if not hasattr(user, 'teacher'):
                 return Response({'error': 'Người dùng không phải là giáo viên'}, status=status.HTTP_400_BAD_REQUEST)
@@ -308,6 +314,12 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
         except User.DoesNotExist:
             return Response({'error': 'Không tìm thấy người dùng'}, status=status.HTTP_404_NOT_FOUND)
+    def destroy(self, request, *args, **kwargs):
+        # Xoá mềm user
+        instance = self.get_object()
+        instance.soft_delete()  # Sử dụng soft delete thay vì xóa hoàn toàn
+        return Response(status=status.HTTP_204_NO_CONTENT)
+        
 
 
 class RegisterAPIView(viewsets.ViewSet, generics.CreateAPIView):
@@ -686,9 +698,11 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
     def get_queryset(self):
 
         queryset = self.queryset.annotate(user_count=Count('users'))
-        q = self.request.query_params.get('q')
-        if q:
-            queryset = queryset.filter(group_name__icontains=q)
+        # Chỉ lọc theo 'q' nếu đang gọi action 'list'
+        if self.action == 'list':
+            q = self.request.query_params.get('q')
+            if q:
+                queryset = queryset.filter(group_name__icontains=q)
         return queryset
 
     def list(self, request, *args, **kwargs):
@@ -719,10 +733,11 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         
         # Sử dụng paginator cho người dùng
         paginator = OptionUserPagination()
-        # Serialize nhóm
-        group_serializer = self.get_serializer(instance)
+        
         # Lấy dữ liệu người dùng được phân trang
         page = paginator.paginate_queryset(users_queryset, request)
+        # Serialize nhóm
+        group_serializer = self.get_serializer(instance)
         # Chuẩn bị dữ liệu trả về
         response_data = group_serializer.data
         # Nếu có phân trang
@@ -779,7 +794,7 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'], url_path='add_users')
-    def add_users(self, request, id=None):
+    def add_users(self, request, pk=None):
         # Thêm users vào nhóm
         instance = self.get_object()
         users = request.data.get('users', [])
@@ -795,7 +810,7 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='remove_users')
-    def remove_users(self, request, id=None):
+    def remove_users(self, request, pk=None):
         """Xóa users khỏi nhóm"""
         instance = self.get_object()
         users = request.data.get('users', [])

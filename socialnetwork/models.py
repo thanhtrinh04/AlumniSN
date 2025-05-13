@@ -23,6 +23,10 @@ class User(AbstractUser):
     class Meta:
         ordering=['id']
 
+    def soft_delete(self, using=None, keep_parents=False):
+        self.is_active = False
+        self.save(update_fields=['is_active'])    
+
 
 class BaseModel(models.Model):
     created_date=models.DateTimeField(auto_now_add=True,null=True)
