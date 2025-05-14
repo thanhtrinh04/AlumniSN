@@ -342,7 +342,6 @@ class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIVi
     queryset = Post.objects.filter(active=True)
     serializer_class = PostSerializer
     pagination_class = PostPagination
-
     def get_parser_classes(self):
         if self.action in ['create', 'update']:
             return [JSONParser, MultiPartParser]
@@ -453,7 +452,6 @@ class CommentViewSet(viewsets.ViewSet):
     queryset = Comment.objects.filter(active=True)
     serializer_class = CommentSerializer
     parser_classes = [JSONParser, MultiPartParser]
-
     def get_permissions(self):
         if self.action == "update":
             return [OwnerPermission()]
