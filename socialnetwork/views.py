@@ -16,7 +16,8 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from SocialNetworkApp import settings
 from .firebase_config import create_chat_room, send_message, get_messages, mark_messages_as_read
 from django.http import JsonResponse
-from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination,OptionUserPagination
+from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination,OptionUserPagination,MessagePagination,ChatRoomPagination
+from rest_framework.pagination import PageNumberPagination
 
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
@@ -92,6 +93,8 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         return queryset
     @action(methods=['get'], url_path='current_user', detail=False)
     def get_current_user(self, request):
+        if not request.user.is_authenticated:
+            return Response({'error': 'Chưa xác thực user'}, status=status.HTTP_401_UNAUTHORIZED)
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
 
     @action(methods=['patch'], url_path='verify_user', detail=True)
@@ -1014,26 +1017,28 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
     serializer_class = ChatRoomSerializer
     queryset = ChatRoom.objects.all()
     lookup_field = 'id'
+    pagination_class = ChatRoomPagination
 
     def get_queryset(self):
         return ChatRoom.objects.filter(
             models.Q(user1=self.request.user) | models.Q(user2=self.request.user)
-        )
+        ).select_related('user1', 'user2')
 
     def list(self, request, *args, **kwargs):
-        """Lấy danh sách tất cả phòng chat của người dùng hiện tại"""
         queryset = self.get_queryset()
-        serializer = self.get_serializer(queryset, many=True)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
 
     def create(self, request, *args, **kwargs):
-        """Tạo phòng chat mới với người dùng khác"""
         user_id = request.data.get('user_id')
         if not user_id:
-            return Response(
-                {'error': 'Vui lòng cung cấp ID của người dùng'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': 'Vui lòng cung cấp ID của người dùng'}, status=status.HTTP_400_BAD_REQUEST)
+        if request.user.id == int(user_id):
+            return Response({'error': 'Không thể tạo phòng chat với chính mình.'}, status=status.HTTP_400_BAD_REQUEST)
 
         other_user = get_object_or_404(User, id=user_id)
         
@@ -1042,66 +1047,78 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
             models.Q(user1=request.user, user2=other_user) |
             models.Q(user1=other_user, user2=request.user)
         ).first()
-
         if existing_room:
-            return Response(ChatRoomSerializer(existing_room).data)
+            return Response(ChatRoomSerializer(existing_room, context={'request': request}).data)
 
-        # Tạo phòng chat mới
-        chat_room = ChatRoom.objects.create(
-            user1=request.user,
-            user2=other_user
-        )
-        
+        chat_room = ChatRoom.objects.create(user1=request.user, user2=other_user)
         # Tạo phòng chat trong Firebase
         create_chat_room(chat_room.id, [request.user, other_user])
-        
-        return Response(ChatRoomSerializer(chat_room).data)
+        return Response(ChatRoomSerializer(chat_room, context={'request': request}).data)
 
-    @action(detail=True, methods=['get'], url_path='get_messages')
+    @action(detail=True, methods=['get'], url_path='messages')
     def get_messages(self, request, id=None):
-        """Lấy tin nhắn từ một phòng chat cụ thể"""
+        """Lấy tin nhắn mới nhất từ Firebase và đánh dấu đã đọc"""
         chat_room = get_object_or_404(
             ChatRoom.objects.filter(
                 models.Q(user1=request.user) | models.Q(user2=request.user)
             ),
-            id=id
+            pk=id
         )
-        
-        # Đánh dấu tin nhắn đã đọc
-        mark_messages_as_read(id, request.user.id)
-        
-        # Lấy tin nhắn từ Firebase
+        # Lấy tin nhắn mới nhất từ Firebase
         messages = get_messages(id)
+        # Đánh dấu đã đọc trên Firebase
+        mark_messages_as_read(id, request.user.id)
         return Response(messages)
 
     @action(detail=True, methods=['post'], url_path='send_message')
     def send_message(self, request, id=None):
-        """Gửi tin nhắn đến phòng chat"""
         chat_room = get_object_or_404(
             ChatRoom.objects.filter(
                 models.Q(user1=request.user) | models.Q(user2=request.user)
             ),
-            id=id
+            pk=id
         )
         content = request.data.get('content')
-        
         if not content:
-            return Response(
-                {'error': 'Vui lòng nhập nội dung tin nhắn'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': 'Vui lòng nhập nội dung tin nhắn'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Lưu tin nhắn vào Firebase
-        message = send_message(id, request.user.id, content)
-        
-        # Lưu tin nhắn vào database
+        # Gửi tin nhắn lên Firebase 
+        firebase_message = send_message(id, request.user.id, content)
+        # Lưu vào DB để backup/thống kê
         db_message = Message.objects.create(
             chat_room=chat_room,
             sender=request.user,
             content=content
         )
-        
+        # Cập nhật last_message, last_message_time cho ChatRoom
+        chat_room.last_message = content
+        chat_room.last_message_time = db_message.created_date
+        chat_room.save(update_fields=['last_message', 'last_message_time'])
+
         return Response(MessageSerializer(db_message).data)
+
+    @action(detail=True, methods=['get'], url_path='old_messages')
+    def get_old_messages(self, request, id=None):
+        """Phân trang tin nhắn cũ từ DB, trả về từ mới nhất đến cũ nhất để FE append khi cuộn lên"""
+        chat_room = get_object_or_404(
+            ChatRoom.objects.filter(
+                models.Q(user1=request.user) | models.Q(user2=request.user)
+            ),
+            pk=id
+        )
+        before_id = request.query_params.get('before_id')
+        queryset = chat_room.messages.order_by('-created_date').select_related('sender')
+        if before_id:
+            try:
+                before_message = Message.objects.get(pk=before_id, chat_room=chat_room)
+                queryset = queryset.filter(created_date__lt=before_message.created_date)
+            except Message.DoesNotExist:
+                return Response({'count': 0, 'next': None, 'previous': None, 'results': []}, status=200)
+        # Sử dụng DRF Pagination
+        paginator = MessagePagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = MessageSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 # class CustomTokenView(TokenView):
 #     def post(self, request, *args, **kwargs):
