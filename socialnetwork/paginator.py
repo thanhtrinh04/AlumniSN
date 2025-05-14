@@ -16,3 +16,9 @@ class CommentPagination(PageNumberPagination):
 
 class GroupPagination(PageNumberPagination):
     page_size = 5
+
+class MessagePagination(PageNumberPagination):
+    page_size = 8
+
+class ChatRoomPagination(PageNumberPagination):
+    page_size = 6

@@ -256,13 +256,22 @@ class EventInvitePostSerializer(serializers.ModelSerializer):
 class ChatRoomSerializer(serializers.ModelSerializer):
     user1 = UserSerializer(read_only=True)
     user2 = UserSerializer(read_only=True)
+    other_user = serializers.SerializerMethodField()
     last_message = serializers.CharField(read_only=True)
     last_message_time = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = ChatRoom
-        fields = ['id', 'user1', 'user2', 'last_message', 'last_message_time']
+        fields = ['id', 'user1', 'user2', 'other_user', 'last_message', 'last_message_time']
         read_only_fields = ['last_message', 'last_message_time']
+
+    def get_other_user(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        user = request.user
+        other = obj.user2 if obj.user1 == user else obj.user1
+        return UserSerializer(other, context=self.context).data
 
     def create(self, validated_data):
         user_id = self.context['request'].data.get('user_id')

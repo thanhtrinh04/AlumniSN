@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 env/
+.env
 venv/
 *.sqlite3
 .DS_Store
