@@ -46,8 +46,18 @@ class IsOwner(permissions.BasePermission):
 
 class OwnerPermission(permissions.IsAuthenticated):
     def has_object_permission(self, request, view, object):
-        return super().has_permission(request, view) and object == request.user
+        print("Checking OwnerPermission:")
+        print("Post user:", object.user)
+        print("Request user:", request.user)
+        return  object.user == request.user
 
 class CommentDeletePermission(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         return obj.post.user == request.user or obj.user == request.user or getattr(request.user, "role", None) == 0
+
+class IsOwnerOrAdmin(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        # obj là Post instance, kiểm tra user có phải owner hoặc role admin (role 0)
+        is_owner = obj.user == request.user
+        is_admin = getattr(request.user, 'role', None) == 0
+        return is_owner or is_admin

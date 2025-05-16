@@ -31,7 +31,7 @@ SECRET_KEY = 'django-insecure-p6#uhi!xrh%=*^xi9@^i_=*xoqoo-m9$wgx@*^$zk-rxj1rv#7
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["192.168.0.23","127.0.0.1"]
 
 
 # Application definition
@@ -195,5 +195,5 @@ CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
 CELERY_IMPORTS = ('socialnetwork.tasks',)
 
 
-ALLOWED_HOSTS=['192.168.1.234']
+
 

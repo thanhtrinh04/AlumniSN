@@ -13,6 +13,8 @@ from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.views import APIView
+
 from SocialNetworkApp import settings
 from .firebase_config import create_chat_room, send_message, get_messages, mark_messages_as_read
 from django.http import JsonResponse
@@ -22,7 +24,7 @@ from rest_framework.pagination import PageNumberPagination
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
     ReactionSerializer, GroupSerializer,GroupDetailSerializer,EventInvitePostSerializer, ChatRoomSerializer, MessageSerializer
-from .perms import RolePermission,OwnerPermission,CommentDeletePermission
+from .perms import RolePermission,OwnerPermission,CommentDeletePermission,IsOwnerOrAdmin
 from cloudinary.uploader import upload
 # from .tasks import send_email_async
 from socialnetwork.perms import  IsSelf, IsOwner, IsAuthenticatedUser, AllowAll,IsAdmin
@@ -354,7 +356,7 @@ class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIVi
         if self.action == "create":
             return [IsAuthenticated()]
         elif self.action in ["update", "destroy", "lock_unlock_comments"]:
-            return [OwnerPermission(), RolePermission([0])]
+            return [IsOwnerOrAdmin()]
         return super().get_permissions()
 
     def create(self, request):
@@ -392,16 +394,20 @@ class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIVi
         self.check_object_permissions(request, post)
 
         content = request.data.get('content', post.content)
-        image = request.FILES.get('image')
+        image_file = request.FILES.get('image')
 
         try:
-            if image:
-                upload_result = upload(image, folder='MangXaHoi')
-                post.image = upload_result.get('secure_url')
-            elif 'image' in request.data and request.data['image'] == '':
-                post.image = None  # Nếu client gửi image = '' thì xoá ảnh
             post.content = content
-            post.save(update_fields=['content', 'image'])
+            post.save(update_fields=['content'])
+
+            if image_file:
+                # Tạo ảnh mới liên kết với post
+                upload_result = upload(image_file, folder='MangXaHoi')
+                PostImage.objects.create(post=post, image=upload_result.get('secure_url'))
+            elif 'image' in request.data and request.data['image'] == '':
+                # Nếu client gửi image = '' thì xoá tất cả ảnh của post
+                post.images.all().delete()
+
         except Exception as e:
             return Response({"error": f"Lỗi cập nhật ảnh: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -409,9 +415,11 @@ class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIVi
 
     def destroy(self, request, pk=None):
         post = get_object_or_404(Post, id=pk, active=True)
+        print("POST USER:", post.user)
+        print("REQUEST USER:", request.user)
         self.check_object_permissions(request, post)
-        post.soft_delete()  # Bạn cần method soft_delete() trong model Post
-        return Response({'message': 'Xoá bài viết thành công.'}, status=status.HTTP_204_NO_CONTENT)
+        post.soft_delete()  # Gọi hàm soft delete từ model
+        return Response({'message': 'Xoá bài viết thành công.'}, status=status.HTTP_200_OK)
 
     @action(methods=['get'], url_path='my-posts', detail=False)
     def get_my_posts(self, request):
@@ -450,6 +458,45 @@ class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIVi
         post.lock_comment = not post.lock_comment
         post.save(update_fields=['lock_comment'])
         return Response({'message': 'Cập nhật trạng thái bình luận thành công.'}, status=status.HTTP_200_OK)
+
+
+    @action(methods=['get'], detail=True, url_path='reacts')
+    def reacts(self, request, pk=None):
+        post = get_object_or_404(Post, pk=pk, active=True)
+        reactions = Reaction.objects.filter(post=post, user__is_active=True)
+        serializer = ReactionSerializer(reactions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(methods=['post', 'delete'], detail=True, url_path='react', permission_classes=[IsAuthenticated])
+    def react(self, request, pk=None):
+        post = get_object_or_404(Post, pk=pk, active=True)
+
+        if request.method == 'DELETE':
+            try:
+                reaction = Reaction.objects.get(user=request.user, post=post)
+                reaction.delete()
+                # Sửa lại từ 204 => 200, giữ lại message nếu cần
+                return Response({"message": "Reaction đã được xóa."}, status=status.HTTP_200_OK)
+            except Reaction.DoesNotExist:
+                return Response({"detail": "Reaction không tồn tại."}, status=status.HTTP_404_NOT_FOUND)
+
+        elif request.method == 'POST':
+            reaction_id = request.data.get("reaction")
+            try:
+                reaction = Reaction.objects.get(user=request.user, post=post)
+                if not reaction_id:
+                    reaction.delete()
+                    return Response({"message": "Reaction đã được xóa."}, status=status.HTTP_200_OK)
+                else:
+                    reaction.reaction = reaction_id
+                    reaction.save()
+                    return Response(ReactionSerializer(reaction).data, status=status.HTTP_200_OK)
+            except Reaction.DoesNotExist:
+                if not reaction_id:
+                    return Response({"detail": "Không có reaction để xóa."}, status=status.HTTP_400_BAD_REQUEST)
+                reaction = Reaction.objects.create(user=request.user, post=post, reaction=reaction_id)
+                return Response(ReactionSerializer(reaction).data, status=status.HTTP_201_CREATED)
+
 
 class CommentViewSet(viewsets.ViewSet):
     queryset = Comment.objects.filter(active=True)
@@ -516,7 +563,6 @@ class CommentViewSet(viewsets.ViewSet):
 class ReactionViewSet(viewsets.ViewSet, generics.ListAPIView):
     queryset = Reaction.objects.filter(active=True)
     serializer_class = ReactionSerializer
-
 
 class SurveyPostViewSet(viewsets.ViewSet):
     queryset = SurveyPost.objects.filter(active=True)
