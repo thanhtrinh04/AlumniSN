@@ -6,7 +6,7 @@ from rest_framework.parsers import MultiPartParser,JSONParser
 from email.message import EmailMessage
 from django.core.mail import EmailMessage
 from rest_framework.decorators import action
-from rest_framework import parsers, viewsets, generics, permissions, status
+from rest_framework import parsers, viewsets, generics, permissions, status,filters
 from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
 from django.db.models import Count,Q
 from django.contrib.auth import get_user_model
@@ -342,11 +342,15 @@ class RegisterAPIView(viewsets.ViewSet, generics.CreateAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+class CustomSearchFilter(filters.SearchFilter):
+    search_param = 'q'
 
 class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIView):
     queryset = Post.objects.filter(active=True)
     serializer_class = PostSerializer
     pagination_class = PostPagination
+    filter_backends = [CustomSearchFilter]
+    search_fields = ['content']
     def get_parser_classes(self):
         if self.action in ['create', 'update']:
             return [JSONParser, MultiPartParser]
@@ -564,14 +568,14 @@ class ReactionViewSet(viewsets.ViewSet, generics.ListAPIView):
     queryset = Reaction.objects.filter(active=True)
     serializer_class = ReactionSerializer
 
-class SurveyPostViewSet(viewsets.ViewSet):
+class SurveyPostViewSet(viewsets.ModelViewSet):
     queryset = SurveyPost.objects.filter(active=True)
     serializer_class = SurveyPostSerializer
 
     def get_parser_classes(self):
         if self.action in ['create', 'update']:
             return [JSONParser, MultiPartParser]
-        return [JSONParser]  # Chỉ sử dụng JSONParser cho các phương thức khá
+        return [JSONParser]
 
     def get_permissions(self):
         if self.action == "create":
@@ -584,22 +588,37 @@ class SurveyPostViewSet(viewsets.ViewSet):
             return [OwnerPermission()]
         return super().get_permissions()
 
-    def create(self, request):
+    def create(self, request, *args, **kwargs):
+        print("DEBUG: Create survey called")
         self.check_permissions(request)
-        content = request.data.get('content')
-        images = request.FILES.getlist('images')
+
+        content = request.data.get('content', '')  # default là chuỗi rỗng
+        images = request.FILES.getlist('images') if hasattr(request, 'FILES') else []
         survey_type = request.data.get('survey_type')
         end_time = request.data.get('end_time')
         questions_data = request.data.get('questions')
 
-        try:
-            questions_data = json.loads(questions_data)
-        except json.JSONDecodeError as e:
-            return Response({"error": f"Lỗi phân tích cú pháp JSON: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        # Nếu questions là chuỗi JSON thì parse
+        if isinstance(questions_data, str):
+            try:
+                questions_data = json.loads(questions_data)
+            except json.JSONDecodeError as e:
+                return Response({"error": f"Lỗi phân tích cú pháp JSON: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
-        survey_post = SurveyPost.objects.create(content=content, user=request.user, survey_type=survey_type,
-                                                end_time=end_time)
+        # Kiểm tra trường bắt buộc
+        if not survey_type or not end_time or not questions_data:
+            return Response({"error": "survey_type, end_time và questions là bắt buộc."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
+        # Tạo survey post chính
+        survey_post = SurveyPost.objects.create(
+            content=content,
+            user=request.user,
+            survey_type=survey_type,
+            end_time=end_time
+        )
+
+        # Upload ảnh nếu có
         for image in images:
             try:
                 upload_result = upload(image, folder='MangXaHoi')
@@ -608,14 +627,14 @@ class SurveyPostViewSet(viewsets.ViewSet):
             except Exception as e:
                 return Response({"error": f"Lỗi đăng ảnh: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = self.get_serializer(survey_post)
-
+        # Tạo câu hỏi + lựa chọn
         for question_data in questions_data:
             options_data = question_data.pop('options', [])
             question = SurveyQuestion.objects.create(survey_post=survey_post, **question_data)
             for option_data in options_data:
                 SurveyOption.objects.create(survey_question=question, **option_data)
 
+        serializer = self.get_serializer(survey_post)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def update(self, request, pk=None):
@@ -629,10 +648,10 @@ class SurveyPostViewSet(viewsets.ViewSet):
         questions_data = request.data.get('questions', [])
 
         if isinstance(questions_data, str):
-            questions_data = json.loads(questions_data)
-
-        if not isinstance(questions_data, list):
-            questions_data = []
+            try:
+                questions_data = json.loads(questions_data)
+            except json.JSONDecodeError:
+                questions_data = []
 
         survey_post.content = content
         survey_post.survey_type = survey_type
@@ -640,14 +659,13 @@ class SurveyPostViewSet(viewsets.ViewSet):
         survey_post.save()
 
         PostImage.objects.filter(post=survey_post).delete()
-        if images:
-            for image in images:
-                try:
-                    upload_result = upload(image, folder='MangXaHoi')
-                    image_url = upload_result.get('secure_url')
-                    PostImage.objects.create(post=survey_post, image=image_url)
-                except Exception as e:
-                    return Response({"error": f"Lỗi đăng ảnh: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        for image in images:
+            try:
+                upload_result = upload(image, folder='MangXaHoi')
+                image_url = upload_result.get('secure_url')
+                PostImage.objects.create(post=survey_post, image=image_url)
+            except Exception as e:
+                return Response({"error": f"Lỗi đăng ảnh: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = SurveyPostSerializer(survey_post)
         return Response(serializer.data, status=status.HTTP_200_OK)

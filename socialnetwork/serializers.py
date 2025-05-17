@@ -200,10 +200,23 @@ class SurveyQuestionSerializer(serializers.ModelSerializer):
 class SurveyPostSerializer(PostSerializer):
     questions = SurveyQuestionSerializer(many=True, required=False)
 
-    class Meta:
+    class Meta(PostSerializer.Meta):
         model = SurveyPost
-        fields = ['id', 'end_time', 'survey_type', 'questions']
+        fields = PostSerializer.Meta.fields + ['end_time', 'survey_type', 'questions']
 
+
+    def create(self, validated_data):
+        questions_data = validated_data.pop('questions', [])
+        survey_post = SurveyPost.objects.create(**validated_data)
+
+        for question_data in questions_data:
+            options_data = question_data.pop('options', [])
+            question = SurveyQuestion.objects.create(survey_post=survey_post, **question_data)
+
+            for option_data in options_data:
+                SurveyOption.objects.create(survey_question=question, **option_data)  # Sửa ở đây
+
+        return survey_post
 class UserSurveyOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserSurveyOption
