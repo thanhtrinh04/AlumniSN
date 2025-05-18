@@ -25,11 +25,7 @@ from django.db.models import Prefetch
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
     ReactionSerializer, GroupSerializer,GroupDetailSerializer,EventInvitePostSerializer, ChatRoomSerializer, MessageSerializer
-<<<<<<< HEAD
-from .perms import RolePermission,OwnerPermission,CommentDeletePermission, IsChatParticipant
-=======
-from .perms import RolePermission,OwnerPermission,CommentDeletePermission,IsOwnerOrAdmin
->>>>>>> e90b42f7776b5695db9da51b66d791ee74ab7df5
+from .perms import RolePermission,OwnerPermission,CommentDeletePermission,IsOwnerOrAdmin,IsChatParticipant
 from cloudinary.uploader import upload
 # from .tasks import send_email_async
 from socialnetwork.perms import  IsSelf, IsOwner, IsAuthenticatedUser, AllowAll,IsAdmin
