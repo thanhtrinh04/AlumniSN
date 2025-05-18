@@ -14,15 +14,16 @@ from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from SocialNetworkApp import settings
-from .firebase_config import create_chat_room, send_message, get_messages, mark_messages_as_read
+from .firebase_config import create_chat_room, send_message, mark_messages_as_read, get_last_message,update_last_message_is_read
 from django.http import JsonResponse
 from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination,OptionUserPagination,MessagePagination,ChatRoomPagination
 from rest_framework.pagination import PageNumberPagination
+from django.db.models import Prefetch
 
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
     ReactionSerializer, GroupSerializer,GroupDetailSerializer,EventInvitePostSerializer, ChatRoomSerializer, MessageSerializer
-from .perms import RolePermission,OwnerPermission,CommentDeletePermission
+from .perms import RolePermission,OwnerPermission,CommentDeletePermission, IsChatParticipant
 from cloudinary.uploader import upload
 # from .tasks import send_email_async
 from socialnetwork.perms import  IsSelf, IsOwner, IsAuthenticatedUser, AllowAll,IsAdmin
@@ -81,7 +82,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
         queryset = queryset.filter(
             Q(alumni__isnull=True) | Q(alumni__is_verified=True),
-            Q(teacher__isnull=True) | Q(teacher__must_change_password=False) | Q(teacher__password_reset_time__lt=now)
+            Q(teacher__isnull=True) | Q(teacher__must_change_password=False) | Q(teacher__password_reset_time__gte=now)
         )
 
         # Tìm kiếm theo tên
@@ -1013,16 +1014,34 @@ class EventInviteViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.List
 #         return Response(response_data, status=status.HTTP_200_OK)
 
 class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.RetrieveAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsChatParticipant]
     serializer_class = ChatRoomSerializer
     queryset = ChatRoom.objects.all()
-    lookup_field = 'id'
     pagination_class = ChatRoomPagination
 
     def get_queryset(self):
-        return ChatRoom.objects.filter(
-            models.Q(user1=self.request.user) | models.Q(user2=self.request.user)
-        ).select_related('user1', 'user2')
+        user = self.request.user
+        queryset = ChatRoom.objects.filter(
+            models.Q(user1=user) | models.Q(user2=user)
+        ).select_related('user1', 'user2').prefetch_related(
+            Prefetch(
+                'messages',
+                queryset=Message.objects.order_by('-created_date')[:1],
+                to_attr='latest_message'
+            )
+        ).order_by('-last_message_time')
+        q = self.request.query_params.get('q')
+        if q:
+            queryset = queryset.filter(
+                Q(user1=user, user2__first_name__icontains=q) |
+                Q(user1=user, user2__last_name__icontains=q) |
+                Q(user1=user, user2__username__icontains=q) |
+                Q(user2=user, user1__first_name__icontains=q) |
+                Q(user2=user, user1__last_name__icontains=q) |
+                Q(user2=user, user1__username__icontains=q)
+            )
+        return queryset
+
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
@@ -1056,55 +1075,13 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
         return Response(ChatRoomSerializer(chat_room, context={'request': request}).data)
 
     @action(detail=True, methods=['get'], url_path='messages')
-    def get_messages(self, request, id=None):
-        """Lấy tin nhắn mới nhất từ Firebase và đánh dấu đã đọc"""
+    def get_messages(self, request, pk=None):
+        """Phân trang tin nhắn từ DB, trả về từ mới nhất đến cũ nhất để FE append khi cuộn lên"""
         chat_room = get_object_or_404(
             ChatRoom.objects.filter(
                 models.Q(user1=request.user) | models.Q(user2=request.user)
             ),
-            pk=id
-        )
-        # Lấy tin nhắn mới nhất từ Firebase
-        messages = get_messages(id)
-        # Đánh dấu đã đọc trên Firebase
-        mark_messages_as_read(id, request.user.id)
-        return Response(messages)
-
-    @action(detail=True, methods=['post'], url_path='send_message')
-    def send_message(self, request, id=None):
-        chat_room = get_object_or_404(
-            ChatRoom.objects.filter(
-                models.Q(user1=request.user) | models.Q(user2=request.user)
-            ),
-            pk=id
-        )
-        content = request.data.get('content')
-        if not content:
-            return Response({'error': 'Vui lòng nhập nội dung tin nhắn'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Gửi tin nhắn lên Firebase 
-        firebase_message = send_message(id, request.user.id, content)
-        # Lưu vào DB để backup/thống kê
-        db_message = Message.objects.create(
-            chat_room=chat_room,
-            sender=request.user,
-            content=content
-        )
-        # Cập nhật last_message, last_message_time cho ChatRoom
-        chat_room.last_message = content
-        chat_room.last_message_time = db_message.created_date
-        chat_room.save(update_fields=['last_message', 'last_message_time'])
-
-        return Response(MessageSerializer(db_message).data)
-
-    @action(detail=True, methods=['get'], url_path='old_messages')
-    def get_old_messages(self, request, id=None):
-        """Phân trang tin nhắn cũ từ DB, trả về từ mới nhất đến cũ nhất để FE append khi cuộn lên"""
-        chat_room = get_object_or_404(
-            ChatRoom.objects.filter(
-                models.Q(user1=request.user) | models.Q(user2=request.user)
-            ),
-            pk=id
+            pk=pk
         )
         before_id = request.query_params.get('before_id')
         queryset = chat_room.messages.order_by('-created_date').select_related('sender')
@@ -1119,6 +1096,57 @@ class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView
         page = paginator.paginate_queryset(queryset, request)
         serializer = MessageSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='send_message')
+    def send_message(self, request, pk=None):
+        chat_room = get_object_or_404(
+            ChatRoom.objects.filter(
+                models.Q(user1=request.user) | models.Q(user2=request.user)
+            ),
+            pk=pk
+        )
+        content = request.data.get('content')
+        if not content:
+            return Response({'error': 'Vui lòng nhập nội dung tin nhắn'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Lưu vào DB để backup/thống kê trước để lấy id
+        db_message = Message.objects.create(
+            chat_room=chat_room,
+            sender=request.user,
+            content=content
+        )
+        user_ids = [chat_room.user1.id, chat_room.user2.id]
+        # Gửi tin nhắn lên Firestore với id trùng DB
+        send_message(pk, request.user.id, content, user_ids=user_ids, message_id=db_message.id)
+        # Cập nhật last_message, last_message_time cho ChatRoom
+        chat_room.last_message = content
+        chat_room.last_message_time = db_message.created_date
+        chat_room.save(update_fields=['last_message', 'last_message_time'])
+
+        return Response(MessageSerializer(db_message).data)
+
+    @action(detail=True, methods=['post'], url_path='mark_as_read')
+    def mark_as_read(self, request, pk=None):
+        """Đánh dấu tất cả tin nhắn chưa đọc là đã đọc cho user hiện tại (Firestore + DB)"""
+        chat_room = get_object_or_404(
+            ChatRoom.objects.filter(
+                models.Q(user1=request.user) | models.Q(user2=request.user)
+            ),
+            pk=pk
+        )
+        mark_messages_as_read(pk, request.user.id)
+        Message.objects.filter(chat_room=chat_room, is_read=False).exclude(sender=request.user).update(is_read=True)
+        # Đồng bộ trạng thái đã đọc lên lastMessages
+        update_last_message_is_read(pk, True)
+        return Response({'is_read': True})
+
+    @action(detail=True, methods=['get'], url_path='last_message')
+    def get_last_message(self, request, pk=None):
+        """Lấy 1 tin nhắn mới nhất từ Firestore cho phòng chat này"""
+        messages = get_last_message(pk)
+        if messages:
+            return Response(messages[0])
+        return Response({})
 
 # class CustomTokenView(TokenView):
 #     def post(self, request, *args, **kwargs):

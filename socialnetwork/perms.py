@@ -34,8 +34,14 @@ class IsSelf(permissions.IsAuthenticated):
 
     def has_object_permission(self, request, view, obj):
         # Chỉ cho phép nếu object chính là user hiện tại
-        return obj == request.user
+        return request.user.is_authenticated and obj == request.user
 
+class IsChatParticipant(permissions.IsAuthenticated):
+    """
+    Chỉ cho phép user là 1 trong 2 người trong phòng chat.
+    """
+    def has_object_permission(self, request, view, obj):
+        return obj.user1 == request.user or obj.user2 == request.user
 
 class IsOwner(permissions.BasePermission):
     """

@@ -254,39 +254,51 @@ class EventInvitePostSerializer(serializers.ModelSerializer):
         return post
 
 class ChatRoomSerializer(serializers.ModelSerializer):
-    user1 = UserSerializer(read_only=True)
-    user2 = UserSerializer(read_only=True)
     other_user = serializers.SerializerMethodField()
     last_message = serializers.CharField(read_only=True)
     last_message_time = serializers.DateTimeField(read_only=True)
+    last_message_sender_id = serializers.SerializerMethodField()
+    is_read = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatRoom
-        fields = ['id', 'user1', 'user2', 'other_user', 'last_message', 'last_message_time']
-        read_only_fields = ['last_message', 'last_message_time']
+        fields = ['id', 'other_user', 'last_message', 'last_message_time', 'last_message_sender_id', 'is_read']
+        read_only_fields = ['last_message', 'last_message_time', 'last_message_sender_id', 'is_read']
 
     def get_other_user(self, obj):
         request = self.context.get('request')
-        if not request:
+        if not request or not request.user.is_authenticated:
             return None
         user = request.user
         other = obj.user2 if obj.user1 == user else obj.user1
-        return UserSerializer(other, context=self.context).data
+        return {
+            'id': other.id,
+            'username': other.username,
+            'first_name': other.first_name,
+            'last_name': other.last_name,
+            'avatar': other.avatar.url if other.avatar else None
+        }
 
-    def create(self, validated_data):
-        user_id = self.context['request'].data.get('user_id')
-        if not user_id:
-            raise serializers.ValidationError("Vui lòng cung cấp ID của người dùng")
-            
-        try:
-            user2 = User.objects.get(id=user_id)
-            chat_room = ChatRoom.objects.create(
-                user1=self.context['request'].user,
-                user2=user2
-            )
-            return chat_room
-        except User.DoesNotExist:
-            raise serializers.ValidationError("Người dùng không tồn tại")
+    def get_last_message_sender_id(self, obj):
+        latest_message_list = getattr(obj, 'latest_message', [])
+        if latest_message_list:
+            latest_message = latest_message_list[0]
+            if latest_message and hasattr(latest_message, 'sender'):
+                return latest_message.sender.id
+        return None
+
+    def get_is_read(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return True
+        user = request.user
+        latest_message_list = getattr(obj, 'latest_message', [])
+        if not latest_message_list:
+            return True
+        latest_message = latest_message_list[0]
+        if latest_message.sender == user:
+            return True
+        return latest_message.is_read
 
 class MessageSerializer(serializers.ModelSerializer):
     sender = UserSerializer(read_only=True)
