@@ -8,6 +8,7 @@ from rest_framework.serializers import ModelSerializer, PrimaryKeyRelatedField
 from cloudinary.uploader import upload as cloudinary_upload
 import os
 from django.conf import settings
+from django.db import transaction
 # User = get_user_model()
 
 
@@ -87,12 +88,21 @@ class UserRegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         mssv = validated_data.pop('mssv', None)
         password = validated_data.pop('password')
-        user = User(**validated_data)
-        user.set_password(password)
-        user.role = Role.ALUMNI.value  # Mặc định là ALUMNI
-        user.save()
-        Alumni.objects.create(user=user, mssv=mssv)
+        with transaction.atomic():
+            user = User(**validated_data)
+            user.set_password(password)
+            user.role = Role.ALUMNI.value  # Mặc định là ALUMNI
+            user.save()
+            Alumni.objects.create(user=user, mssv=mssv)
         return user
+# serializer bổ sung mssv khi đăng kí bằng google
+# class AddMSSVSerializer(serializers.Serializer):
+#     mssv = serializers.CharField()
+
+#     def validate_mssv(self, value):
+#         if Alumni.objects.filter(mssv=value).exists():
+#             raise serializers.ValidationError("MSSV này đã được đăng ký cho tài khoản khác.")
+#         return value
 
 
 class TeacherCreateSerializer(serializers.ModelSerializer):
@@ -144,6 +154,17 @@ class TeacherCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'avatar']
+
+#serializer đăng kí bằng google
+class GoogleRegisterSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    mssv = serializers.CharField()
+
+    def validate_mssv(self, value):
+        if Alumni.objects.filter(mssv=value).exists():
+            raise serializers.ValidationError("MSSV đã tồn tại.")
+        return value
+       
 
 
 class PostImageSerializer(ModelSerializer):
