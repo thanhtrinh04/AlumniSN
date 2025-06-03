@@ -4,6 +4,10 @@ from django.template.response import TemplateResponse
 from django.urls import path
 from django.db.models import Count, Q
 from datetime import datetime, timedelta
+from oauth2_provider.models import Application
+from oauth2_provider.admin import ApplicationAdmin
+from social_django.models import UserSocialAuth
+ 
 
 from .models import *
 
@@ -288,4 +292,5 @@ my_admin_site.register(SurveyQuestion, SurveyQuestionAdmin)
 my_admin_site.register(SurveyOption, SurveyOptionAdmin)
 my_admin_site.register(Group, GroupAdmin)
 my_admin_site.register(EventInvitePost, EventInvitePostAdmin)
-
+my_admin_site.register(Application, ApplicationAdmin)
+my_admin_site.register(UserSocialAuth)
