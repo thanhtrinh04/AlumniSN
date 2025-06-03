@@ -42,6 +42,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework_social_oauth2.views import ConvertTokenView
 from social_core.exceptions import AuthForbidden, AuthTokenError, AuthCanceled
 from social_django.models import UserSocialAuth
+import traceback
+from requests.exceptions import HTTPError
 User = get_user_model()
 
 
