@@ -480,7 +480,6 @@ class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIVi
             try:
                 reaction = Reaction.objects.get(user=request.user, post=post)
                 reaction.delete()
-                # Sửa lại từ 204 => 200, giữ lại message nếu cần
                 return Response({"message": "Reaction đã được xóa."}, status=status.HTTP_200_OK)
             except Reaction.DoesNotExist:
                 return Response({"detail": "Reaction không tồn tại."}, status=status.HTTP_404_NOT_FOUND)
@@ -501,6 +500,13 @@ class PostViewSet(viewsets.ViewSet, generics.RetrieveAPIView, generics.ListAPIVi
                     return Response({"detail": "Không có reaction để xóa."}, status=status.HTTP_400_BAD_REQUEST)
                 reaction = Reaction.objects.create(user=request.user, post=post, reaction=reaction_id)
                 return Response(ReactionSerializer(reaction).data, status=status.HTTP_201_CREATED)
+
+    @action(methods=['get'], detail=True, url_path='comments')
+    def get_comments(self, request, pk=None):
+        post = get_object_or_404(Post, pk=pk, active=True)
+        comments = Comment.objects.filter(post=post, active=True).select_related('user').order_by('created_date')
+        serializer = CommentSerializer(comments, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class CommentViewSet(viewsets.ViewSet):
