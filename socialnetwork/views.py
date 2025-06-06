@@ -12,20 +12,16 @@ from django.db.models import Count,Q
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
 from rest_framework.generics import get_object_or_404
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
 
 from SocialNetworkApp import settings
 from .firebase_config import create_chat_room, send_message, mark_messages_as_read, get_last_message,update_last_message_is_read
-from django.http import JsonResponse
 from socialnetwork.paginator import UserPagination,PostPagination,GroupPagination,OptionUserPagination,MessagePagination,ChatRoomPagination
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Prefetch
-
 from .models import User,Post,Comment,Reaction,Group,PostImage,SurveyPost,SurveyType,SurveyDraft,SurveyOption,SurveyQuestion,UserSurveyOption,Role, Group, EventInvitePost, Alumni, ChatRoom, Message
 from .serializers import UserSerializer,UserRegisterSerializer,GoogleRegisterSerializer,TeacherCreateSerializer,PostSerializer,CommentSerializer,SurveyPostSerializer, UserSerializer, SurveyDraftSerializer, \
     ReactionSerializer, GroupSerializer,GroupDetailSerializer,EventInvitePostSerializer, ChatRoomSerializer, MessageSerializer
-
 from .perms import RolePermission,OwnerPermission,CommentDeletePermission,IsOwnerOrAdmin,IsChatParticipant
 from cloudinary.uploader import upload
 from socialnetwork.perms import  IsSelf, IsOwner, IsAuthenticatedUser, AllowAll,IsAdmin
@@ -33,18 +29,13 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.utils import timezone
 from django.db import models
-from oauth2_provider.views import TokenView 
-from django.contrib.auth import authenticate
-from social_django.utils import load_strategy, load_backend
 from django.core.files.uploadedfile import SimpleUploadedFile
 import requests
 from rest_framework.permissions import AllowAny
-from rest_framework_social_oauth2.views import ConvertTokenView
-from social_core.exceptions import AuthForbidden, AuthTokenError, AuthCanceled
 from social_django.models import UserSocialAuth
-import traceback
-from requests.exceptions import HTTPError
-from django.utils.dateparse import parse_datetime
+
+
+
 User = get_user_model()
 
 
