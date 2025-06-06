@@ -7,7 +7,6 @@ from email.message import EmailMessage
 from django.core.mail import EmailMessage
 from rest_framework.decorators import action
 from rest_framework import parsers, viewsets, generics, permissions, status,filters
-from django.db.models.functions import TruncYear, TruncMonth, TruncQuarter
 from django.db.models import Count,Q
 from django.contrib.auth import get_user_model
 from rest_framework.response import Response
@@ -33,14 +32,11 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from django.utils import timezone
 from django.db import models
-from oauth2_provider.views import TokenView 
 from django.contrib.auth import authenticate
 from social_django.utils import load_strategy, load_backend
 from django.core.files.uploadedfile import SimpleUploadedFile
 import requests
 from rest_framework.permissions import AllowAny
-from rest_framework_social_oauth2.views import ConvertTokenView
-from social_core.exceptions import AuthForbidden, AuthTokenError, AuthCanceled
 from social_django.models import UserSocialAuth
 import traceback
 from requests.exceptions import HTTPError
@@ -316,7 +312,7 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     @action(detail=False, methods=['get'], url_path='teachers_expired_password_reset')
     def teachers_expired_password_reset(self, request):
         now = timezone.now()
-        # Lọc các giáo viên có password_reset_time không rỗng và đã quá 24h
+        # Lọc các giáo viên có password_reset_time đã quá 24h
         q = request.query_params.get('q')
         queryset = User.objects.select_related('teacher').filter(
             is_active=True,
@@ -372,17 +368,6 @@ class UserViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         instance.soft_delete()  # Sử dụng soft delete thay vì xóa hoàn toàn
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(methods=['post'], url_path='add_mssv', detail=False)
-    def add_mssv(self, request):
-        serializer = AddMSSVSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=400)
-        mssv = serializer.validated_data['mssv']
-        user = request.user
-        if hasattr(user, 'alumni'):
-            return Response({'error': 'Bạn đã có MSSV.'}, status=400)
-        Alumni.objects.create(user=user, mssv=mssv, is_verified=False)
-        return Response({'message': 'Đã bổ sung MSSV, chờ xác thực'}, status=200)
       
 
 class GoogleRegisterViewSet(viewsets.ViewSet):
@@ -391,17 +376,17 @@ class GoogleRegisterViewSet(viewsets.ViewSet):
     def create(self, request):
         serializer = GoogleRegisterSerializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=400)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         token = serializer.validated_data['token']
         mssv = serializer.validated_data['mssv']
         user_info = self.get_google_user_info(token)
         if not user_info:
-            return Response({'error': 'Google xác thực thất bại'}, status=400)
+            return Response({'error': 'Google xác thực thất bại'}, status=status.HTTP_400_BAD_REQUEST)
         email = user_info.get('email')
         if User.objects.filter(email=email).exists():
-            return Response({'error': 'Email đã tồn tại'}, status=400)
-        if Alumni.objects.filter(mssv=mssv).exists():
-            return Response({'error': 'MSSV đã tồn tại'}, status=400)
+            return Response({'error': 'Email đã tồn tại'}, status=status.HTTP_400_BAD_REQUEST)
+        # if Alumni.objects.filter(mssv=mssv).exists():
+        #     return Response({'error': 'MSSV đã tồn tại'}, status=400)
         avatar_url = user_info.get('picture')
         avatar_file = None
         if avatar_url:
@@ -865,7 +850,7 @@ class SurveyPostViewSet(viewsets.ModelViewSet):
         return Response({"message": "Survey submitted successfully."}, status=status.HTTP_201_CREATED)
 
 
-class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
+class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.RetrieveAPIView, generics.DestroyAPIView):
     queryset = Group.objects.filter(active=True).order_by('-created_date').prefetch_related('users')
     pagination_class = GroupPagination
     permission_classes = [RolePermission]
@@ -946,28 +931,6 @@ class GroupViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIVie
         
         return Response(response_data, status=status.HTTP_200_OK)    
 
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-        group_name = request.data.get('group_name')
-        users = request.data.get('users', [])
-
-        if group_name:
-            instance.group_name = group_name
-
-        if users:
-            # Xóa tất cả users hiện tại
-            instance.users.clear()
-            # Thêm users mới
-            for user_id in users:
-                try:
-                    user = User.objects.get(id=user_id)
-                    instance.users.add(user)
-                except User.DoesNotExist:
-                    continue
-
-        instance.save()
-        serializer = self.get_serializer(instance)
-        return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
         # Xoá nhóm

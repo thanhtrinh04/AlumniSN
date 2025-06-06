@@ -84,6 +84,11 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         if 'avatar' not in data or not data['avatar']:
             raise serializers.ValidationError({'avatar': 'Vui lòng tải lên ảnh đại diện.'})
         return data
+        
+    def validate_password(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError("Mật khẩu phải có ít nhất 8 ký tự.")
+        return value
 
     def create(self, validated_data):
         mssv = validated_data.pop('mssv', None)
@@ -95,14 +100,6 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             user.save()
             Alumni.objects.create(user=user, mssv=mssv)
         return user
-# serializer bổ sung mssv khi đăng kí bằng google
-# class AddMSSVSerializer(serializers.Serializer):
-#     mssv = serializers.CharField()
-
-#     def validate_mssv(self, value):
-#         if Alumni.objects.filter(mssv=value).exists():
-#             raise serializers.ValidationError("MSSV này đã được đăng ký cho tài khoản khác.")
-#         return value
 
 
 class TeacherCreateSerializer(serializers.ModelSerializer):

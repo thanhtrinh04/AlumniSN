@@ -232,7 +232,7 @@ CELERY_IMPORTS = ('socialnetwork.tasks',)
 
 DRFSO2_URL_NAMESPACE = 'drfso2'
 
-ALLOWED_HOSTS=['localhost','127.0.0.1','192.168.1.3','192.168.1.76']
+ALLOWED_HOSTS=['localhost','127.0.0.1','192.168.1.3']
 
 LOGGING = {
     'version': 1,
