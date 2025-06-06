@@ -238,6 +238,25 @@ class SurveyPostSerializer(PostSerializer):
                 SurveyOption.objects.create(survey_question=question, **option_data)  # Sửa ở đây
 
         return survey_post
+
+    def update(self, instance, validated_data):
+        questions_data = validated_data.pop('questions', None)
+
+        instance.content = validated_data.get('content', instance.content)
+        instance.survey_type = validated_data.get('survey_type', instance.survey_type)
+        instance.end_time = validated_data.get('end_time', instance.end_time)
+        instance.save()
+
+        if questions_data is not None:
+            instance.questions.all().delete()
+            for question_data in questions_data:
+                options_data = question_data.pop('options', [])
+                question = SurveyQuestion.objects.create(survey_post=instance, **question_data)
+                for option_data in options_data:
+                    SurveyOption.objects.create(survey_question=question, **option_data)
+
+        return instance
+
 class UserSurveyOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserSurveyOption

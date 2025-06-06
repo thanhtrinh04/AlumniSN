@@ -44,6 +44,7 @@ from social_core.exceptions import AuthForbidden, AuthTokenError, AuthCanceled
 from social_django.models import UserSocialAuth
 import traceback
 from requests.exceptions import HTTPError
+from django.utils.dateparse import parse_datetime
 User = get_user_model()
 
 
@@ -765,28 +766,54 @@ class SurveyPostViewSet(viewsets.ModelViewSet):
         questions_data = request.data.get('questions', [])
 
         if isinstance(questions_data, str):
-            try:
-                questions_data = json.loads(questions_data)
-            except json.JSONDecodeError:
-                questions_data = []
+            questions_data = json.loads(questions_data)
 
+        if not isinstance(questions_data, list):
+            questions_data = []
+
+        # Cập nhật trường cơ bản của SurveyPost
         survey_post.content = content
         survey_post.survey_type = survey_type
         survey_post.end_time = end_time
         survey_post.save()
 
+        # Cập nhật ảnh
         PostImage.objects.filter(post=survey_post).delete()
-        for image in images:
-            try:
-                upload_result = upload(image, folder='MangXaHoi')
-                image_url = upload_result.get('secure_url')
-                PostImage.objects.create(post=survey_post, image=image_url)
-            except Exception as e:
-                return Response({"error": f"Lỗi đăng ảnh: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        if images:
+            for image in images:
+                try:
+                    upload_result = upload(image, folder='MangXaHoi')
+                    image_url = upload_result.get('secure_url')
+                    PostImage.objects.create(post=survey_post, image=image_url)
+                except Exception as e:
+                    return Response({"error": f"Lỗi đăng ảnh: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Xóa hết câu hỏi + lựa chọn cũ trước khi cập nhật mới
+        for question in survey_post.questions.all():
+            question.options.all().delete()  # xóa option của câu hỏi
+            question.delete()  # xóa câu hỏi
+
+        # Thêm câu hỏi mới và các lựa chọn
+        for q in questions_data:
+            question_text = q.get('question', '')
+            multi_choice = q.get('multi_choice', False)
+            options = q.get('options', [])
+
+            new_question = SurveyQuestion.objects.create(
+                survey_post=survey_post,
+                question=question_text,
+                multi_choice=multi_choice,
+            )
+
+            for opt in options:
+                option_text = opt.get('option', '')
+                SurveyOption.objects.create(
+                    survey_question=new_question,
+                    option=option_text,
+                )
 
         serializer = SurveyPostSerializer(survey_post)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
     @action(detail=True, url_path='draft', methods=['post'])
     def draft(self, request, pk=None):
         self.check_permissions(request)
